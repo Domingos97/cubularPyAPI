@@ -1425,25 +1425,45 @@ async def survey_semantic_chat(
         if not ai_response or not ai_response.strip():
             ai_response = "I apologize, but I'm having trouble processing your request at the moment. Please try again."
 
-        # Try to parse as JSON for structured responses
+        # Try to parse as JSON for structured responses, handling double-encoded JSON
         conversational_response = ai_response
         data_snapshot = None
         confidence = None
-        
+
+        def extract_fields_from_obj(obj):
+            conv = obj.get("conversationalResponse", conversational_response)
+            snap = obj.get("dataSnapshot", None)
+            conf = obj.get("confidence", None)
+            return conv, snap, conf
+
+        logger.info(f"Raw AI response: {ai_response}")
+
+        import re
         try:
-            parsed_response = json.loads(ai_response.strip())
-            if isinstance(parsed_response, dict):
-                # Extract structured response components
-                if "conversationalResponse" in parsed_response:
-                    conversational_response = parsed_response["conversationalResponse"]
-                if "dataSnapshot" in parsed_response:
-                    data_snapshot = parsed_response["dataSnapshot"]
-                if "confidence" in parsed_response:
-                    confidence = parsed_response["confidence"]
-        except (json.JSONDecodeError, KeyError):
+            # Replace unescaped control characters (like newlines) with spaces for JSON parsing
+            safe_ai_response = re.sub(r'[\x00-\x1F\x7F]', ' ', ai_response.strip())
+            parsed_response = json.loads(safe_ai_response)
+            logger.info(f"Parsed AI response (first parse): {parsed_response}")
+            # If the result is a string, try to parse again
+            if isinstance(parsed_response, str):
+                try:
+                    safe_parsed_response = re.sub(r'[\x00-\x1F\x7F]', ' ', parsed_response)
+                    parsed_response_2 = json.loads(safe_parsed_response)
+                    logger.info(f"Parsed AI response (second parse): {parsed_response_2}")
+                    if isinstance(parsed_response_2, dict):
+                        conversational_response, data_snapshot, confidence = extract_fields_from_obj(parsed_response_2)
+                except Exception as parse2_err:
+                    logger.warning(f"Failed second parse of AI response: {parse2_err}")
+            elif isinstance(parsed_response, dict):
+                conversational_response, data_snapshot, confidence = extract_fields_from_obj(parsed_response)
+        except (json.JSONDecodeError, KeyError) as parse_err:
+            logger.warning(f"Failed to parse AI response as JSON: {parse_err}")
             # Use raw response if not structured
             pass
 
+        logger.info(f"Extracted conversationalResponse: {conversational_response}")
+        logger.info(f"Extracted dataSnapshot: {data_snapshot}")
+        logger.info(f"Extracted confidence: {confidence}")
         # Save messages to session (if session exists)
         if session_id:
             logger.info(f"🔵 Session exists: {session_id}, attempting to save messages")
