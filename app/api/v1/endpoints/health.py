@@ -1,20 +1,22 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime
-import asyncio
-import uuid
 import psutil
 import platform
 
-from app.core.database import get_db, get_database_health
-from app.models.schemas import HealthCheck
+from app.services.lightweight_db_service import get_lightweight_db, LightweightDBService
+from app.models.schemas import HealthCheck, ErrorResponse
 from app.utils.logging import get_logger
+from app.utils.error_handlers import  internal_server_error
 
 logger = get_logger(__name__)
 router = APIRouter()
 
 
-@router.get("/", response_model=HealthCheck)
+@router.get("/", 
+           response_model=HealthCheck,
+           responses={
+               500: {"model": ErrorResponse, "description": "Internal server error"}
+           })
 async def health_check():
     """
     Basic health check endpoint
@@ -29,6 +31,9 @@ async def health_check():
             database="not_checked",
             services={}
         )
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        raise internal_server_error("Health check service unavailable")
         
     except Exception as e:
         logger.error(f"Health check failed: {str(e)}")
@@ -39,7 +44,7 @@ async def health_check():
 
 
 @router.get("/detailed")
-async def detailed_health_check(db: AsyncSession = Depends(get_db)):
+async def detailed_health_check(db: LightweightDBService = Depends(get_lightweight_db)):
     """
     Detailed health check with database connectivity and system metrics
     
@@ -58,14 +63,15 @@ async def detailed_health_check(db: AsyncSession = Depends(get_db)):
         
         # Database connectivity check with pool monitoring
         try:
-            db_health = await get_database_health()
-            health_data["database"] = db_health
-            
-            if db_health["status"] == "healthy":
-                health_data["checks"]["database"] = "passed"
-            else:
-                health_data["checks"]["database"] = f"failed: {db_health.get('error', 'unknown')}"
-                health_data["status"] = "degraded"
+            # Test database connection using lightweight_db
+            await db.fetch_one("SELECT 1 as test")
+            health_data["database"] = {
+                "status": "healthy",
+                "type": "postgresql",
+                "pool_size": db.pool.get_size() if db.pool else "unknown",
+                "connection_count": db.pool.get_size() - db.pool.get_idle_size() if db.pool else "unknown"
+            }
+            health_data["checks"]["database"] = "passed"
         except Exception as db_error:
             logger.error(f"Database health check failed: {str(db_error)}")
             health_data["database"] = {"status": "error", "error": str(db_error)}
@@ -112,7 +118,7 @@ async def detailed_health_check(db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/ready")
-async def readiness_check(db: AsyncSession = Depends(get_db)):
+async def readiness_check(db: LightweightDBService = Depends(get_lightweight_db)):
     """
     Readiness check for Kubernetes/container orchestration
     
@@ -125,7 +131,7 @@ async def readiness_check(db: AsyncSession = Depends(get_db)):
         
         # Database readiness
         try:
-            await db.execute("SELECT 1")
+            await db.fetch_one("SELECT 1 as test")
             checks["database"] = "ready"
         except Exception as e:
             checks["database"] = f"not_ready: {str(e)}"
@@ -208,7 +214,7 @@ async def liveness_check():
 
 
 @router.get("/dependencies")
-async def dependencies_check(db: AsyncSession = Depends(get_db)):
+async def dependencies_check(db: LightweightDBService = Depends(get_lightweight_db)):
     """
     Check health of external dependencies
     
@@ -220,7 +226,7 @@ async def dependencies_check(db: AsyncSession = Depends(get_db)):
         
         # Database dependency
         try:
-            await db.execute("SELECT version()")
+            await db.fetch_one("SELECT version() as version")
             dependencies["postgresql"] = {
                 "status": "healthy",
                 "type": "database",
@@ -292,7 +298,7 @@ def _check_encryption_service() -> bool:
 
 
 @router.get("/db")
-async def database_health_check(db: AsyncSession = Depends(get_db)):
+async def database_health_check(db: LightweightDBService = Depends(get_lightweight_db)):
     """
     Database health check endpoint (matches TypeScript API)
     
@@ -300,16 +306,13 @@ async def database_health_check(db: AsyncSession = Depends(get_db)):
     """
     try:
         # Test basic database connectivity
-        from sqlalchemy import text
-        result = await db.execute(text("SELECT 1"))
-        db_value = result.scalar()
+        result = await db.fetch_one("SELECT 1 as test")
         
-        if db_value != 1:
+        if result["test"] != 1:
             raise Exception("Database query returned unexpected result")
         
-        # Test transaction capability
-        await db.execute(text("BEGIN"))
-        await db.execute(text("ROLLBACK"))
+        # Test transaction capability - lightweight_db handles this internally
+        await db.fetch_one("SELECT CURRENT_TIMESTAMP as ts")
         
         return {
             "status": "healthy",

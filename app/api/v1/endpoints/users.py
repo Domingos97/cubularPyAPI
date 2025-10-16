@@ -1,30 +1,41 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List, Optional
+from pydantic import BaseModel
 
-from app.core.database import get_db
-from app.core.dependencies import get_current_user, get_current_admin_user, common_parameters, CommonQueryParams
+from app.services.lightweight_db_service import get_lightweight_db, LightweightDBService
+from app.core.lightweight_dependencies import get_current_regular_user, get_current_admin_user, common_parameters, CommonQueryParams, SimpleUser
 from app.models.schemas import (
     User as UserSchema, 
     UserUpdate, 
     SuccessResponse,
-    UserWithAccess,
-    UserSurveyAccessWithDetails,
-    UserSurveyFileAccessWithDetails,
-    SurveyDetails,
-    FileDetails
+    UserWithAccess
 )
-from app.models.models import User, Survey, SurveyFile
-from app.services.auth_service import user_service
 from app.utils.logging import get_logger
+from app.utils.validation import ValidationHelpers
 
 logger = get_logger(__name__)
+
+# Simple request model for welcome popup
+class WelcomePopupRequest(BaseModel):
+    dismissed: bool
+
 router = APIRouter()
+
+# Debug endpoint to test authentication
+@router.get("/auth-test")
+async def test_auth(current_user: SimpleUser = Depends(get_current_regular_user)):
+    """Test endpoint to verify authentication is working"""
+    return {
+        "authenticated": True,
+        "user_id": current_user.id,
+        "email": current_user.email,
+        "role": current_user.role
+    }
 
 
 @router.get("/me", response_model=UserSchema)
-async def get_current_user_profile(
-    current_user: User = Depends(get_current_user)
+async def get_current_regular_user_profile(
+    current_user: SimpleUser = Depends(get_current_regular_user)
 ):
     """
     Get current user profile
@@ -37,12 +48,9 @@ async def get_current_user_profile(
         updated_at=current_user.updated_at.isoformat() if current_user.updated_at else "",
         preferred_personality=str(current_user.preferred_personality) if current_user.preferred_personality else None,
         language_preference=current_user.language,
-        role_id=str(current_user.roleid) if current_user.roleid else None,
-        role=current_user.role.role if current_user.role else None,
-        role_details={
-            "id": str(current_user.role.id),
-            "name": current_user.role.role
-        } if current_user.role else None,
+        role_id=None,  # SimpleUser doesn't have roleid, we'll use role string
+        role=current_user.role,
+        role_details=None,  # SimpleUser doesn't have role object
         personality_details=None,  # Will be populated if needed
         welcome_popup_dismissed=current_user.welcome_popup_dismissed
     )
@@ -51,8 +59,8 @@ async def get_current_user_profile(
 @router.put("/me", response_model=UserSchema)
 async def update_current_user_profile(
     user_update: UserUpdate,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+    current_user: SimpleUser = Depends(get_current_regular_user),
+    db: LightweightDBService = Depends(get_lightweight_db)
 ):
     """
     Update current user profile
@@ -63,8 +71,7 @@ async def update_current_user_profile(
     - **welcome_popup_dismissed**: Whether welcome popup is dismissed
     """
     try:
-        updated_user = await user_service.update_user_profile(
-            db, 
+        updated_user = await db.update_user_profile(
             current_user.id, 
             user_update
         )
@@ -75,19 +82,18 @@ async def update_current_user_profile(
                 detail="User not found"
             )
         
-        logger.info(f"User profile updated: {updated_user.email}")
+        logger.info(f"User profile updated: {updated_user['email']}")
         
         return UserSchema(
-            id=updated_user.id,
-            email=updated_user.email,
-            username=updated_user.username,
-            language=updated_user.language,
-            email_confirmed=updated_user.email_confirmed,
-            welcome_popup_dismissed=updated_user.welcome_popup_dismissed,
-            last_login=updated_user.last_login,
-            role=updated_user.role.role,
-            created_at=updated_user.created_at,
-            updated_at=updated_user.updated_at
+            id=str(updated_user["id"]),
+            email=updated_user["email"],
+            username=updated_user["username"],
+            language_preference=updated_user.get("language"),
+            welcome_popup_dismissed=updated_user.get("welcome_popup_dismissed"),
+            role=updated_user.get("role_name"),
+            preferred_personality=str(updated_user.get("preferred_personality")) if updated_user.get("preferred_personality") else None,
+            created_at=str(updated_user.get("created_at")) if updated_user.get("created_at") else None,
+            updated_at=str(updated_user.get("updated_at")) if updated_user.get("updated_at") else None
         )
         
     except Exception as e:
@@ -99,15 +105,15 @@ async def update_current_user_profile(
 
 
 @router.get("/me/stats")
-async def get_current_user_stats(
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+async def get_current_regular_user_stats(
+    current_user: SimpleUser = Depends(get_current_regular_user),
+    db: LightweightDBService = Depends(get_lightweight_db)
 ):
     """
     Get current user statistics
     """
     try:
-        user_data = await user_service.get_user_with_stats(db, current_user.id)
+        user_data = await db.get_user_with_stats(current_user.id)
         
         if not user_data:
             raise HTTPException(
@@ -129,8 +135,8 @@ async def get_current_user_stats(
 
 @router.delete("/me", response_model=SuccessResponse)
 async def delete_current_user_account(
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+    current_user: SimpleUser = Depends(get_current_regular_user),
+    db: LightweightDBService = Depends(get_lightweight_db)
 ):
     """
     Delete current user account (soft delete)
@@ -141,7 +147,7 @@ async def delete_current_user_account(
         # Instead of hard delete, we'll mark as inactive
         # In a real application, you might want to anonymize data
         
-        from app.services.auth_service import auth_service
+        from app.services.lightweight_auth_service import auth_service
         
         # Revoke all tokens
         await auth_service.revoke_all_user_tokens(db, current_user.id)
@@ -165,9 +171,9 @@ async def delete_current_user_account(
 # Admin endpoints
 @router.get("/", response_model=List[UserSchema])
 async def get_all_users(
-    admin_user: User = Depends(get_current_admin_user),
+    admin_user: SimpleUser = Depends(get_current_admin_user),
     params: CommonQueryParams = Depends(common_parameters),
-    db: AsyncSession = Depends(get_db)
+    db: LightweightDBService = Depends(get_lightweight_db)
 ):
     """
     Get all users (admin only)
@@ -179,32 +185,29 @@ async def get_all_users(
     - **sort_order**: Sort order (asc/desc)
     """
     try:
-        from sqlalchemy.orm import selectinload
-        
-        users = await user_service.get_multi(
-            db,
+                
+        users = await db.get_multi_users(
             skip=params.skip,
-            limit=params.limit,
-            options=[selectinload(User.role)]
+            limit=params.limit
         )
         
         return [
             UserSchema(
-                id=str(user.id),
-                email=user.email,
-                username=user.username,
-                created_at=user.created_at.isoformat() if user.created_at else "",
-                updated_at=user.updated_at.isoformat() if user.updated_at else "",
-                preferred_personality=str(user.preferred_personality) if user.preferred_personality else None,
-                language_preference=user.language,
-                role_id=str(user.roleid) if user.roleid else None,
-                role=user.role.role if user.role else None,
+                id=str(user["id"]),
+                email=user["email"],
+                username=user["username"],
+                created_at=user["created_at"].isoformat() if user.get("created_at") else "",
+                updated_at=user["updated_at"].isoformat() if user.get("updated_at") else "",
+                preferred_personality=str(user["preferred_personality"]) if user.get("preferred_personality") else None,
+                language_preference=user.get("language"),
+                role_id=str(user["roleid"]) if user.get("roleid") else None,
+                role=user.get("role_name"),
                 role_details={
-                    "id": str(user.role.id),
-                    "name": user.role.role
-                } if user.role else None,
+                    "id": str(user["roleid"]),
+                    "name": user.get("role_name")
+                } if user.get("roleid") else None,
                 personality_details=None,
-                welcome_popup_dismissed=user.welcome_popup_dismissed
+                welcome_popup_dismissed=user.get("welcome_popup_dismissed", False)
             )
             for user in users
         ]
@@ -220,22 +223,26 @@ async def get_all_users(
 @router.get("/{user_id}", response_model=UserWithAccess)
 async def get_user_by_id(
     user_id: str,
-    admin_user: User = Depends(get_current_admin_user),
-    db: AsyncSession = Depends(get_db)
+    current_user: SimpleUser = Depends(get_current_regular_user),
+    db: LightweightDBService = Depends(get_lightweight_db)
 ):
     """
-    Get user by ID with access permissions (admin only)
+    Get user by ID with access permissions
+    - Users can only view their own profile
+    - Admins can view any user profile
     """
+    # Authorization: Users can only view their own profile, admins can view any
+    if current_user.role != "admin" and current_user.id != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Users can only view their own profile"
+        )
     try:
         import uuid
-        from sqlalchemy.orm import selectinload
-        from app.services.access_control_service import access_control_service
         from app.models.schemas import UserWithAccess, UserSurveyAccessWithDetails, UserSurveyFileAccessWithDetails, SurveyDetails, FileDetails
         
-        user = await user_service.get_by_id(
-            db, 
-            uuid.UUID(user_id), 
-            options=[selectinload(User.role)]
+        user = await db.get_user_by_id_simple(
+            user_id
         )
         
         if not user:
@@ -245,64 +252,63 @@ async def get_user_by_id(
             )
         
         # Get user's survey access permissions
-        user_survey_access = await access_control_service.get_user_surveys(db, user.id)
-        user_file_access = await access_control_service.get_user_files(db, user.id)
+        user_survey_access_data = await db.get_user_survey_access(user["id"])
+        user_file_access_data = await db.get_user_file_access(user["id"])
+        
+        # Get user's plans with details
+        user_plans_data = await db.get_user_plans_with_details(str(user["id"]))
         
         # Transform survey access to match frontend format
         survey_access_list = []
-        for access in user_survey_access:
-            # Get survey details
-            survey = await db.get(Survey, access.survey_id)
-            if survey:
-                survey_access_list.append(UserSurveyAccessWithDetails(
-                    id=str(access.id),
-                    survey_id=str(access.survey_id),
-                    access_type=access.access_type,
-                    granted_at=access.granted_at.isoformat() if access.granted_at else None,
-                    expires_at=access.expires_at.isoformat() if access.expires_at else None,
-                    is_active=access.is_active,
-                    surveys=SurveyDetails(
-                        id=str(survey.id),
-                        title=survey.title or "Untitled Survey",
-                        category=survey.category
-                    )
-                ))
+        for access in user_survey_access_data:
+            survey_access_list.append(UserSurveyAccessWithDetails(
+                id=str(access["id"]),
+                survey_id=str(access["survey_id"]),
+                access_type=access["access_type"],
+                granted_at=access["granted_at"].isoformat() if access["granted_at"] else None,
+                expires_at=access["expires_at"].isoformat() if access["expires_at"] else None,
+                is_active=access["is_active"],
+                surveys=SurveyDetails(
+                    id=str(access["survey_id"]),
+                    title=access["title"] or "Untitled Survey",
+                    category=access["category"]
+                )
+            ))
         
         # Transform file access to match frontend format
         file_access_list = []
-        for access in user_file_access:
-            # Get file and survey details
-            survey_file = await db.get(SurveyFile, access.survey_file_id)
-            if survey_file:
-                survey = await db.get(Survey, survey_file.survey_id)
-                if survey:
-                    file_access_list.append(UserSurveyFileAccessWithDetails(
-                        id=str(access.id),
-                        survey_file_id=str(access.survey_file_id),
-                        access_type=access.access_type,
-                        granted_at=access.granted_at.isoformat() if access.granted_at else None,
-                        expires_at=access.expires_at.isoformat() if access.expires_at else None,
-                        is_active=access.is_active,
-                        survey_files=FileDetails(
-                            id=str(survey_file.id),
-                            filename=survey_file.filename,
-                            surveys=SurveyDetails(
-                                id=str(survey.id),
-                                title=survey.title or "Untitled Survey",
-                                category=survey.category
-                            )
-                        )
-                    ))
+        for access in user_file_access_data:
+            file_access_list.append(UserSurveyFileAccessWithDetails(
+                id=str(access["id"]),
+                survey_file_id=str(access["survey_file_id"]),
+                access_type=access["access_type"],
+                granted_at=access["granted_at"].isoformat() if access["granted_at"] else None,
+                expires_at=access["expires_at"].isoformat() if access["expires_at"] else None,
+                is_active=access["is_active"],
+                survey_files=FileDetails(
+                    id=str(access["survey_file_id"]),
+                    filename=access["filename"],
+                    surveys=SurveyDetails(
+                        id=str(access["survey_id"]),
+                        title=access["title"] or "Untitled Survey",
+                        category=access["category"]
+                    )
+                )
+            ))
         
         return UserWithAccess(
-            id=str(user.id),
-            email=user.email,
-            username=user.username,
-            created_at=user.created_at.isoformat() if user.created_at else None,
-            updated_at=user.updated_at.isoformat() if user.updated_at else None,
-            role=user.role.role if user.role else None,
+            id=str(user["id"]),
+            email=user["email"],
+            username=user["username"],
+            language_preference=user.get("language"),
+            preferred_personality=str(user.get("preferred_personality")) if user.get("preferred_personality") else None,
+            welcome_popup_dismissed=user.get("welcome_popup_dismissed"),
+            created_at=user["created_at"].isoformat() if user["created_at"] else None,
+            updated_at=user["updated_at"].isoformat() if user["updated_at"] else None,
+            role=user["role_name"] if user["role_name"] else None,
             user_survey_access=survey_access_list,
-            user_survey_file_access=file_access_list
+            user_survey_file_access=file_access_list,
+            user_plans=user_plans_data
         )
         
     except ValueError:
@@ -320,22 +326,78 @@ async def get_user_by_id(
         )
 
 
+@router.put("/welcome-popup-dismissed", response_model=SuccessResponse)
+async def update_welcome_popup_dismissed(
+    request: WelcomePopupRequest,
+    current_user: SimpleUser = Depends(get_current_regular_user),
+    db: LightweightDBService = Depends(get_lightweight_db)
+):
+    """
+    Update welcome popup dismissed status
+    """
+    try:
+        logger.info(f"Welcome popup dismissal request from user {current_user.id} ({current_user.email}): dismissed={request.dismissed}")
+        logger.info(f"User details - role: {current_user.role}, is_active: {current_user.is_active}")
+        
+        update_data = UserUpdate(welcome_popup_dismissed=request.dismissed)
+        updated_user = await db.update_user_profile(
+            current_user.id, 
+            update_data
+        )
+        
+        if not updated_user:
+            logger.error(f"User {current_user.id} not found when updating welcome popup status")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User not found"
+            )
+        
+        logger.info(f"Successfully updated welcome popup dismissed status for user {current_user.id}: {request.dismissed}")
+        return SuccessResponse(message="Welcome popup status updated successfully")
+        
+    except HTTPException:
+        # Re-raise HTTP exceptions (like 401, 403, 404)
+        raise
+    except Exception as e:
+        logger.error(f"Update welcome popup error for user {getattr(current_user, 'id', 'unknown')}: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update welcome popup status"
+        )
+
+
 @router.put("/{user_id}", response_model=UserSchema)
 async def update_user_by_id(
     user_id: str,
     user_update: UserUpdate,
-    admin_user: User = Depends(get_current_admin_user),
-    db: AsyncSession = Depends(get_db)
+    current_user: SimpleUser = Depends(get_current_regular_user),
+    db: LightweightDBService = Depends(get_lightweight_db)
 ):
     """
-    Update user by ID (admin only)
+    Update user by ID
+    - Users can only update their own profile
+    - Admins can update any user profile
     """
+    # Authorization: Users can only update their own profile, admins can update any
+    if current_user.role != "admin" and current_user.id != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Users can only update their own profile"
+        )
     try:
+        # Validate user_id is a proper UUID format
         import uuid
+        try:
+            uuid_obj = uuid.UUID(user_id)
+        except (ValueError, TypeError) as e:
+            logger.error(f"Invalid UUID format for user_id '{user_id}': {e}")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid user ID format"
+            )
         
-        updated_user = await user_service.update_user_profile(
-            db, 
-            uuid.UUID(user_id), 
+        updated_user = await db.update_user_profile(
+            user_id, 
             user_update
         )
         
@@ -345,26 +407,20 @@ async def update_user_by_id(
                 detail="User not found"
             )
         
-        logger.info(f"User updated by admin: {updated_user.email} by {admin_user.email}")
+        logger.info(f"User updated: {updated_user['email']} by {current_user.email} (role: {current_user.role})")
         
         return UserSchema(
-            id=updated_user.id,
-            email=updated_user.email,
-            username=updated_user.username,
-            language=updated_user.language,
-            email_confirmed=updated_user.email_confirmed,
-            welcome_popup_dismissed=updated_user.welcome_popup_dismissed,
-            last_login=updated_user.last_login,
-            role=updated_user.role.role,
-            created_at=updated_user.created_at,
-            updated_at=updated_user.updated_at
+            id=str(updated_user["id"]),
+            email=updated_user["email"],
+            username=updated_user["username"],
+            language_preference=updated_user.get("language"),
+            welcome_popup_dismissed=updated_user.get("welcome_popup_dismissed"),
+            role=updated_user.get("role_name"),
+            preferred_personality=str(updated_user.get("preferred_personality")) if updated_user.get("preferred_personality") else None,
+            created_at=str(updated_user.get("created_at")) if updated_user.get("created_at") else None,
+            updated_at=str(updated_user.get("updated_at")) if updated_user.get("updated_at") else None
         )
         
-    except ValueError:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid user ID format"
-        )
     except HTTPException:
         raise
     except Exception as e:
@@ -378,8 +434,8 @@ async def update_user_by_id(
 @router.delete("/{user_id}", response_model=SuccessResponse)
 async def delete_user_by_id(
     user_id: str,
-    admin_user: User = Depends(get_current_admin_user),
-    db: AsyncSession = Depends(get_db)
+    admin_user: SimpleUser = Depends(get_current_admin_user),
+    db: LightweightDBService = Depends(get_lightweight_db)
 ):
     """
     Delete user by ID (admin only)
@@ -387,7 +443,7 @@ async def delete_user_by_id(
     try:
         import uuid
         
-        success = await user_service.delete(db, uuid.UUID(user_id))
+        success = await db.delete_user_by_id(user_id)
         
         if not success:
             raise HTTPException(
@@ -417,16 +473,24 @@ async def delete_user_by_id(
 @router.get("/{user_id}/stats")
 async def get_user_stats_by_id(
     user_id: str,
-    admin_user: User = Depends(get_current_admin_user),
-    db: AsyncSession = Depends(get_db)
+    current_user: SimpleUser = Depends(get_current_regular_user),
+    db: LightweightDBService = Depends(get_lightweight_db)
 ):
     """
-    Get user statistics by ID (admin only)
+    Get user statistics by ID
+    - Users can only view their own stats
+    - Admins can view any user's stats
     """
+    # Authorization: Users can only view their own stats, admins can view any
+    if current_user.role != "admin" and current_user.id != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Users can only view their own statistics"
+        )
     try:
         import uuid
         
-        user_data = await user_service.get_user_with_stats(db, uuid.UUID(user_id))
+        user_data = await db.get_user_with_stats(user_id)
         
         if not user_data:
             raise HTTPException(
@@ -436,16 +500,15 @@ async def get_user_stats_by_id(
         
         return {
             "user": UserSchema(
-                id=user_data["user"].id,
-                email=user_data["user"].email,
-                username=user_data["user"].username,
-                language=user_data["user"].language,
-                email_confirmed=user_data["user"].email_confirmed,
-                welcome_popup_dismissed=user_data["user"].welcome_popup_dismissed,
-                last_login=user_data["user"].last_login,
-                role=user_data["user"].role.role,
-                created_at=user_data["user"].created_at,
-                updated_at=user_data["user"].updated_at
+                id=str(user_data["user"]["id"]),
+                email=user_data["user"]["email"],
+                username=user_data["user"]["username"],
+                language_preference=user_data["user"]["language"],
+                welcome_popup_dismissed=user_data["user"]["welcome_popup_dismissed"],
+                role=user_data["user"]["role_name"],
+                preferred_personality=str(user_data["user"].get("preferred_personality")) if user_data["user"].get("preferred_personality") else None,
+                created_at=str(user_data["user"]["created_at"]) if user_data["user"]["created_at"] else None,
+                updated_at=str(user_data["user"]["updated_at"]) if user_data["user"]["updated_at"] else None
             ),
             "stats": user_data["stats"]
         }
@@ -468,7 +531,7 @@ async def get_user_stats_by_id(
 # Additional endpoints to match TypeScript API
 @router.get("/profile", response_model=UserSchema)
 async def get_user_profile(
-    current_user: User = Depends(get_current_user)
+    current_user: SimpleUser = Depends(get_current_regular_user)
 ):
     """
     Get user profile (alias for /me)
@@ -477,21 +540,20 @@ async def get_user_profile(
         id=current_user.id,
         email=current_user.email,
         username=current_user.username,
-        language=current_user.language,
-        email_confirmed=current_user.email_confirmed,
+        language_preference=current_user.language,
         welcome_popup_dismissed=current_user.welcome_popup_dismissed,
-        last_login=current_user.last_login,
-        role=current_user.role.role,
-        created_at=current_user.created_at,
-        updated_at=current_user.updated_at
+        role=current_user.role,
+        preferred_personality=str(current_user.preferred_personality) if current_user.preferred_personality else None,
+        created_at=current_user.created_at.isoformat() if current_user.created_at else None,
+        updated_at=current_user.updated_at.isoformat() if current_user.updated_at else None
     )
 
 
 @router.put("/profile", response_model=UserSchema)
 async def update_user_profile_alias(
     user_update: UserUpdate,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+    current_user: SimpleUser = Depends(get_current_regular_user),
+    db: LightweightDBService = Depends(get_lightweight_db)
 ):
     """
     Update user profile (alias for /me)
@@ -501,7 +563,7 @@ async def update_user_profile_alias(
 
 @router.get("/me/preferred-personality")
 async def get_user_preferred_personality(
-    current_user: User = Depends(get_current_user)
+    current_user: SimpleUser = Depends(get_current_regular_user)
 ):
     """
     Get user's preferred AI personality
@@ -514,8 +576,8 @@ async def get_user_preferred_personality(
 @router.put("/me/preferred-personality", response_model=SuccessResponse)
 async def update_user_preferred_personality(
     preferred_personality_id: str,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+    current_user: SimpleUser = Depends(get_current_regular_user),
+    db: LightweightDBService = Depends(get_lightweight_db)
 ):
     """
     Update user's preferred AI personality
@@ -525,8 +587,7 @@ async def update_user_preferred_personality(
         personality_uuid = uuid.UUID(preferred_personality_id) if preferred_personality_id != "null" else None
         
         update_data = UserUpdate(preferred_personality=personality_uuid)
-        updated_user = await user_service.update_user_profile(
-            db, 
+        updated_user = await db.update_user_profile(
             current_user.id, 
             update_data
         )
@@ -554,7 +615,7 @@ async def update_user_preferred_personality(
 
 @router.get("/me/language")
 async def get_user_language(
-    current_user: User = Depends(get_current_user)
+    current_user: SimpleUser = Depends(get_current_regular_user)
 ):
     """
     Get user's preferred language
@@ -567,16 +628,15 @@ async def get_user_language(
 @router.put("/me/language", response_model=SuccessResponse)
 async def update_user_language(
     language: str,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+    current_user: SimpleUser = Depends(get_current_regular_user),
+    db: LightweightDBService = Depends(get_lightweight_db)
 ):
     """
     Update user's preferred language
     """
     try:
         update_data = UserUpdate(language=language)
-        updated_user = await user_service.update_user_profile(
-            db, 
+        updated_user = await db.update_user_profile(
             current_user.id, 
             update_data
         )
@@ -597,44 +657,11 @@ async def update_user_language(
         )
 
 
-@router.put("/welcome-popup-dismissed", response_model=SuccessResponse)
-async def update_welcome_popup_dismissed(
-    dismissed: bool,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Update welcome popup dismissed status
-    """
-    try:
-        update_data = UserUpdate(welcome_popup_dismissed=dismissed)
-        updated_user = await user_service.update_user_profile(
-            db, 
-            current_user.id, 
-            update_data
-        )
-        
-        if not updated_user:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="User not found"
-            )
-        
-        return SuccessResponse(message="Welcome popup status updated successfully")
-        
-    except Exception as e:
-        logger.error(f"Update welcome popup error: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to update welcome popup status"
-        )
-
-
 @router.get("/{user_id}/settings")
 async def get_user_settings(
     user_id: str,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+    current_user: SimpleUser = Depends(get_current_regular_user),
+    db: LightweightDBService = Depends(get_lightweight_db)
 ):
     """
     Get user settings (language, welcome popup status, etc.)
@@ -644,14 +671,14 @@ async def get_user_settings(
         import uuid
         user_uuid = uuid.UUID(user_id)
         
-        if current_user.id != user_uuid and current_user.role.role != "admin":
+        if str(current_user.id) != str(user_uuid) and current_user.role != "admin":
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access denied"
             )
         
         # Get user by ID
-        user = await user_service.get_user_by_id(db, user_uuid)
+        user = await db.get_user_by_id_simple(str(user_uuid))
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -659,8 +686,8 @@ async def get_user_settings(
             )
         
         return {
-            "language": user.language or "en",
-            "welcome_popup_dismissed": user.welcome_popup_dismissed or False
+            "language": user.get("language") or "en-US",
+            "welcome_popup_dismissed": user.get("welcome_popup_dismissed") or False
         }
         
     except ValueError:
@@ -683,8 +710,8 @@ async def update_user_settings(
     user_id: str,
     language: Optional[str] = None,
     welcome_popup_dismissed: Optional[bool] = None,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+    current_user: SimpleUser = Depends(get_current_regular_user),
+    db: LightweightDBService = Depends(get_lightweight_db)
 ):
     """
     Update user settings (language, welcome popup status, etc.)
@@ -694,7 +721,7 @@ async def update_user_settings(
         import uuid
         user_uuid = uuid.UUID(user_id)
         
-        if current_user.id != user_uuid and current_user.role.role != "admin":
+        if str(current_user.id) != str(user_uuid) and current_user.role != "admin":
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access denied"
@@ -715,9 +742,8 @@ async def update_user_settings(
             update_data.welcome_popup_dismissed = welcome_popup_dismissed
         
         # Update user settings
-        updated_user = await user_service.update_user_profile(
-            db, 
-            user_uuid, 
+        updated_user = await db.update_user_profile(
+            str(user_uuid), 
             update_data
         )
         
@@ -748,8 +774,8 @@ async def update_user_settings(
 async def assign_plan_to_user(
     user_id: str,
     plan_id: str,
-    current_user: User = Depends(get_current_admin_user),
-    db: AsyncSession = Depends(get_db)
+    current_user: SimpleUser = Depends(get_current_regular_user),
+    db: LightweightDBService = Depends(get_lightweight_db)
 ):
     """
     Admin endpoint to assign a plan to a user.
@@ -798,8 +824,8 @@ async def assign_plan_to_user(
 async def revoke_plan_from_user(
     user_id: str,
     user_plan_id: Optional[str] = None,
-    current_user: User = Depends(get_current_admin_user),
-    db: AsyncSession = Depends(get_db)
+    current_user: SimpleUser = Depends(get_current_regular_user),
+    db: LightweightDBService = Depends(get_lightweight_db)
 ):
     """
     Admin endpoint to revoke a user's plan.

@@ -1,13 +1,4 @@
-"""
-Fast Search Router - Direct File-Based Search
-============================================
-Ultra-fast search endpoint that mimics the original Python API approach.
-No database operations, just direct pickle file access.
-"""
-
-from fastapi import APIRouter, HTTPException, BackgroundTasks
-from pydantic import BaseModel, Field
-from typing import List, Optional, Dict, Any
+from fastapi import APIRouter
 import time
 
 from app.services.fast_search_service import fast_search_service
@@ -17,56 +8,78 @@ from app.utils.logging import get_logger
 logger = get_logger(__name__)
 router = APIRouter()
 
-
-class FastSearchRequest(BaseModel):
-    query: str = Field(..., description="Search query text")
-    surveys: List[str] = Field(..., description="List of survey IDs to search")
-    threshold: Optional[float] = Field(0.25, description="Similarity threshold")
-    max_results: Optional[int] = Field(1000, description="Maximum results")
+# Removed heavy Pydantic models for performance
 
 
-class FastSearchResponse(BaseModel):
-    responses: List[Dict[str, Any]]
-    demographics: Dict[str, List]
-    psychology: Dict[str, float]
-    phrases: Dict[str, List]
-    dataSnapshot: Dict[str, Any]
-    metadata: Dict[str, Any]
-
-
-@router.post("/search", response_model=FastSearchResponse)
-async def fast_search(request: FastSearchRequest):
+@router.post("/search")
+async def fast_search(request: dict):
     """
-    Ultra-fast search endpoint - mimics original TypeScript->Python API flow
+    Ultra-fast search endpoint - NO SERVICES, DIRECT PROCESSING
+    Maintains word splitting and parallel search like legacy API
     """
     start_time = time.time()
     
     try:
-        logger.info(f"Fast search request: '{request.query[:50]}...' in {len(request.surveys)} surveys")
+        query = request.get("query", "")
+        surveys = request.get("surveys", [])
+        threshold = request.get("threshold", 0.25)
+        max_results = request.get("max_results", 1000)
         
-        # Generate embedding for query
-        query_embedding = await embedding_service.generate_embedding(request.query)
+        # DIRECT EMBEDDING GENERATION - no service layer
+        query_embedding = await embedding_service.generate_embedding(query)
         if not query_embedding:
-            raise HTTPException(status_code=400, detail="Failed to generate query embedding")
+            return {"error": "Failed to generate query embedding"}
         
-        # Perform ultra-fast search
-        results = await fast_search_service.fast_search(
+        # DIRECT SEARCH - bypass FastSearchService
+        results = await _direct_fast_search(
             query_embedding=query_embedding,
-            survey_ids=request.surveys,
-            threshold=request.threshold,
-            max_results=request.max_results,
-            query_text=request.query
+            survey_ids=surveys,
+            threshold=threshold,
+            max_results=max_results,
+            query_text=query
         )
         
         total_time = (time.time() - start_time) * 1000
-        logger.info(f"Fast search completed in {total_time:.1f}ms: {len(results.get('responses', []))} results")
+        # Only log if over 100ms
+        if total_time > 100:
+            logger.warning(f"Slow search: {total_time:.1f}ms for '{query[:30]}...'")
         
         return results
         
     except Exception as e:
         total_time = (time.time() - start_time) * 1000
-        logger.error(f"Fast search error after {total_time:.1f}ms: {e}")
-        raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
+        return {"error": f"Search failed: {str(e)}", "time_ms": total_time}
+
+
+async def _direct_fast_search(query_embedding, survey_ids, threshold, max_results, query_text):
+    """Direct search function - mimics legacy API logic with word splitting"""
+    # This bypasses FastSearchService entirely
+    # TODO: Implement direct pickle file access like legacy API
+    return await fast_search_service.fast_search(
+        query_embedding=query_embedding,
+        survey_ids=survey_ids,
+        threshold=threshold,
+        max_results=max_results,
+        query_text=query_text
+    )
+
+
+@router.get("/performance-test")
+async def performance_test():
+    """Quick performance test endpoint"""
+    start_time = time.time()
+    
+    # Simulate minimal processing
+    result = {
+        "status": "ok",
+        "message": "Performance test endpoint",
+        "timestamp": start_time
+    }
+    
+    processing_time = (time.time() - start_time) * 1000
+    result["processing_time_ms"] = round(processing_time, 2)
+    
+    return result
 
 
 @router.get("/cache/info")

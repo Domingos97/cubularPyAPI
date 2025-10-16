@@ -1,18 +1,15 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List
 import uuid
 
-from app.core.database import get_db
-from app.core.dependencies import get_current_user, get_current_admin_user
+from app.services.lightweight_db_service import get_lightweight_db, LightweightDBService
+from app.core.lightweight_dependencies import get_current_regular_user, get_current_admin_user, SimpleUser
 from app.models.schemas import (
     AIPersonalityCreate,
     AIPersonalityUpdate,
     AIPersonality,
-    SuccessResponse,
-    ErrorResponse
+    SuccessResponse
 )
-from app.models.models import User
 from app.services.ai_personality_service import ai_personality_service
 from app.utils.logging import get_logger
 
@@ -24,8 +21,8 @@ router = APIRouter()
 async def get_ai_personalities(
     skip: int = 0,
     limit: int = 100,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    db: LightweightDBService = Depends(get_lightweight_db),
+    current_user: SimpleUser = Depends(get_current_regular_user)
 ):
     """
     Get all AI personalities
@@ -36,9 +33,25 @@ async def get_ai_personalities(
     Returns list of AI personalities available to the user
     """
     try:
-        personalities = await ai_personality_service.get_all_personalities(
-            db, skip=skip, limit=limit
-        )
+        personalities_data = await db.get_all_ai_personalities(skip=skip, limit=limit)
+        
+        # Convert to response format
+        personalities = [
+            AIPersonality(
+                id=str(p["id"]),
+                name=p["name"],
+                description=p["description"],
+                detailed_analysis_prompt=p["detailed_analysis_prompt"] or "",
+                suggestions_prompt=p["suggestions_prompt"] or "",
+                model_override=None,
+                temperature_override=None,
+                is_default=p.get("is_default", False),
+                is_active=p.get("is_active", True),
+                created_at=p["created_at"].isoformat() if p.get("created_at") else "",
+                updated_at=p["updated_at"].isoformat() if p.get("updated_at") else ""
+            )
+            for p in personalities_data
+        ]
         
         logger.info(f"Retrieved {len(personalities)} AI personalities for user {current_user.id}")
         return personalities
@@ -54,8 +67,8 @@ async def get_ai_personalities(
 @router.get("/{personality_id}", response_model=AIPersonality)
 async def get_ai_personality_by_id(
     personality_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    db: LightweightDBService = Depends(get_lightweight_db),
+    current_user: SimpleUser = Depends(get_current_admin_user)
 ):
     """
     Get specific AI personality by ID
@@ -65,15 +78,27 @@ async def get_ai_personality_by_id(
     Returns the AI personality details
     """
     try:
-        personality = await ai_personality_service.get_personality_by_id(
-            db, personality_id
-        )
+        personality_data = await db.get_ai_personality(str(personality_id))
         
-        if not personality:
+        if not personality_data:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="AI personality not found"
             )
+        
+        personality = AIPersonality(
+            id=str(personality_data["id"]),
+            name=personality_data["name"],
+            description=personality_data["description"],
+            detailed_analysis_prompt=personality_data["detailed_analysis_prompt"] or "",
+            suggestions_prompt=personality_data["suggestions_prompt"] or "",
+            model_override=None,
+            temperature_override=None,
+            is_default=personality_data.get("is_default", False),
+            is_active=personality_data.get("is_active", True),
+            created_at=personality_data["created_at"].isoformat() if personality_data.get("created_at") else "",
+            updated_at=personality_data["updated_at"].isoformat() if personality_data.get("updated_at") else ""
+        )
         
         logger.info(f"Retrieved AI personality {personality_id} for user {current_user.id}")
         return personality
@@ -91,8 +116,8 @@ async def get_ai_personality_by_id(
 @router.post("/", response_model=AIPersonality, status_code=status.HTTP_201_CREATED)
 async def create_ai_personality(
     personality_data: AIPersonalityCreate,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_admin_user)
+    db: LightweightDBService = Depends(get_lightweight_db),
+    current_user: SimpleUser = Depends(get_current_admin_user)
 ):
     """
     Create a new AI personality (Admin only)
@@ -108,8 +133,23 @@ async def create_ai_personality(
     Returns the created AI personality
     """
     try:
-        personality = await ai_personality_service.create_personality(
-            db, personality_data, created_by=current_user.id
+        personality_dict = personality_data.dict()
+        personality_dict['created_by'] = current_user.id
+        
+        personality_result = await db.create_ai_personality(personality_dict)
+        
+        personality = AIPersonality(
+            id=str(personality_result["id"]),
+            name=personality_result["name"],
+            description=personality_result["description"],
+            detailed_analysis_prompt=personality_result["detailed_analysis_prompt"] or "",
+            suggestions_prompt=personality_result["suggestions_prompt"] or "",
+            model_override=None,
+            temperature_override=None,
+            is_default=personality_result.get("is_default", False),
+            is_active=personality_result.get("is_active", True),
+            created_at=personality_result["created_at"].isoformat() if personality_result.get("created_at") else "",
+            updated_at=personality_result["updated_at"].isoformat() if personality_result.get("updated_at") else ""
         )
         
         logger.info(f"Created AI personality {personality.id} by admin {current_user.id}")
@@ -133,8 +173,8 @@ async def create_ai_personality(
 async def update_ai_personality(
     personality_id: uuid.UUID,
     personality_data: AIPersonalityUpdate,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_admin_user)
+    db: LightweightDBService = Depends(get_lightweight_db),
+    current_user: SimpleUser = Depends(get_current_admin_user)
 ):
     """
     Update an existing AI personality (Admin only)
@@ -152,15 +192,28 @@ async def update_ai_personality(
     Returns the updated AI personality
     """
     try:
-        personality = await ai_personality_service.update_personality(
-            db, personality_id, personality_data
-        )
+        personality_dict = personality_data.dict(exclude_unset=True)
+        personality_result = await db.update_ai_personality(str(personality_id), personality_dict)
         
-        if not personality:
+        if not personality_result:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="AI personality not found"
             )
+        
+        personality = AIPersonality(
+            id=str(personality_result["id"]),
+            name=personality_result["name"],
+            description=personality_result["description"],
+            detailed_analysis_prompt=personality_result["detailed_analysis_prompt"] or "",
+            suggestions_prompt=personality_result["suggestions_prompt"] or "",
+            model_override=None,
+            temperature_override=None,
+            is_default=personality_result.get("is_default", False),
+            is_active=personality_result.get("is_active", True),
+            created_at=personality_result["created_at"].isoformat() if personality_result.get("created_at") else "",
+            updated_at=personality_result["updated_at"].isoformat() if personality_result.get("updated_at") else ""
+        )
         
         logger.info(f"Updated AI personality {personality_id} by admin {current_user.id}")
         return personality
@@ -184,8 +237,8 @@ async def update_ai_personality(
 @router.delete("/{personality_id}", response_model=SuccessResponse)
 async def delete_ai_personality(
     personality_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_admin_user)
+    db: LightweightDBService = Depends(get_lightweight_db),
+    current_user: SimpleUser = Depends(get_current_admin_user)
 ):
     """
     Delete an AI personality (Admin only)
@@ -195,9 +248,7 @@ async def delete_ai_personality(
     Returns success confirmation
     """
     try:
-        success = await ai_personality_service.delete_personality(
-            db, personality_id
-        )
+        success = await db.delete_ai_personality(str(personality_id))
         
         if not success:
             raise HTTPException(
@@ -223,8 +274,8 @@ async def delete_ai_personality(
 @router.post("/{personality_id}/set-default", response_model=AIPersonality)
 async def set_default_ai_personality(
     personality_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_admin_user)
+    db: LightweightDBService = Depends(get_lightweight_db),
+    current_user: SimpleUser = Depends(get_current_admin_user)
 ):
     """
     Set an AI personality as default (Admin only)
@@ -234,15 +285,27 @@ async def set_default_ai_personality(
     Returns the updated AI personality
     """
     try:
-        personality = await ai_personality_service.set_as_default(
-            db, personality_id
-        )
+        personality_result = await db.set_ai_personality_as_default(str(personality_id))
         
-        if not personality:
+        if not personality_result:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="AI personality not found"
             )
+        
+        personality = AIPersonality(
+            id=str(personality_result["id"]),
+            name=personality_result["name"],
+            description=personality_result["description"],
+            detailed_analysis_prompt=personality_result["detailed_analysis_prompt"] or "",
+            suggestions_prompt=personality_result["suggestions_prompt"] or "",
+            model_override=None,
+            temperature_override=None,
+            is_default=personality_result.get("is_default", False),
+            is_active=personality_result.get("is_active", True),
+            created_at=personality_result["created_at"].isoformat() if personality_result.get("created_at") else "",
+            updated_at=personality_result["updated_at"].isoformat() if personality_result.get("updated_at") else ""
+        )
         
         logger.info(f"Set AI personality {personality_id} as default by admin {current_user.id}")
         return personality
@@ -259,8 +322,8 @@ async def set_default_ai_personality(
 
 @router.get("/active/list", response_model=List[AIPersonality])
 async def get_active_ai_personalities(
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    db: LightweightDBService = Depends(get_lightweight_db),
+    current_user: SimpleUser = Depends(get_current_regular_user)
 ):
     """
     Get only active AI personalities
@@ -268,7 +331,24 @@ async def get_active_ai_personalities(
     Returns list of active AI personalities available to the user
     """
     try:
-        personalities = await ai_personality_service.get_active_personalities(db)
+        personalities_data = await db.get_active_ai_personalities()
+        
+        personalities = [
+            AIPersonality(
+                id=str(p["id"]),
+                name=p["name"],
+                description=p["description"],
+                detailed_analysis_prompt=p["detailed_analysis_prompt"] or "",
+                suggestions_prompt=p["suggestions_prompt"] or "",
+                model_override=None,
+                temperature_override=None,
+                is_default=p.get("is_default", False),
+                is_active=p.get("is_active", True),
+                created_at=p["created_at"].isoformat() if p.get("created_at") else "",
+                updated_at=p["updated_at"].isoformat() if p.get("updated_at") else ""
+            )
+            for p in personalities_data
+        ]
         
         logger.info(f"Retrieved {len(personalities)} active AI personalities for user {current_user.id}")
         return personalities

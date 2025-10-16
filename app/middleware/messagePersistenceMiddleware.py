@@ -6,7 +6,6 @@ import uuid
 import time
 import json
 
-from app.core.dependencies import get_db
 from app.models.models import ChatSession, ChatMessage, MessageRole
 from app.utils.logging import get_logger
 

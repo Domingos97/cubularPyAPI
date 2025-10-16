@@ -61,9 +61,17 @@ def create_refresh_token() -> str:
 def verify_token(token: str) -> Optional[Dict[str, Any]]:
     """Verify and decode a JWT token"""
     try:
+        from app.utils.logging import get_logger
+        logger = get_logger(__name__)
+        
+        logger.info(f"Verifying token: {token[:20]}...")
         payload = jwt.decode(token, settings.secret_key, algorithms=[settings.jwt_algorithm])
+        logger.info(f"Token verification successful, user_id: {payload.get('sub')}")
         return payload
-    except JWTError:
+    except JWTError as e:
+        from app.utils.logging import get_logger
+        logger = get_logger(__name__)
+        logger.error(f"JWT verification failed: {e}")
         return None
 
 

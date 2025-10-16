@@ -5,12 +5,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
 from sqlalchemy.orm import selectinload
 
-from app.models.models import UserSurveyAccess, UserSurveyFileAccess, User, Survey, SurveyFile
+from app.models.models import UserSurveyAccess, UserSurveyFileAccess, User
 from app.models.schemas import (
-    UserSurveyAccessCreate,
-    UserSurveyAccessUpdate,
-    UserSurveyFileAccessCreate,
-    UserSurveyFileAccessUpdate,
     AccessType
 )
 

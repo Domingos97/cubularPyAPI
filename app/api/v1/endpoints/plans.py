@@ -1,18 +1,15 @@
-from typing import List, Optional
+from typing import List
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database import get_db
-from app.core.dependencies import get_current_user
-from app.models.models import User
+from app.services.lightweight_db_service import get_lightweight_db, LightweightDBService
+from app.core.lightweight_dependencies import get_current_user, get_current_admin_user, SimpleUser
 from app.models.schemas import (
     Plan as PlanSchema,
     PlanCreate,
     PlanUpdate,
-    UserPlan as UserPlanSchema,
-    UserPlanCreate
+    UserPlan as UserPlanSchema
 )
 from app.services.plan_service import PlanService
 
@@ -22,19 +19,14 @@ router = APIRouter()
 @router.post("/", response_model=PlanSchema)
 async def create_plan(
     plan_data: PlanCreate,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    db: LightweightDBService = Depends(get_lightweight_db),
+    current_user: SimpleUser = Depends(get_current_admin_user)
 ):
     """Create a new plan. Admin only."""
-    if current_user.role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admins can create plans"
-        )
-    
     try:
-        plan = await PlanService.create_plan(db, plan_data)
-        return plan
+        plan_dict = plan_data.dict()
+        plan_result = await db.create_plan(plan_dict)
+        return PlanSchema(**plan_result)
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -47,22 +39,75 @@ async def get_plans(
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=1000),
     active_only: bool = Query(True),
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    db: LightweightDBService = Depends(get_lightweight_db),
 ):
     """Get all plans with pagination."""
-    plans = await PlanService.get_plans(db, skip, limit, active_only)
-    return plans
+    try:
+        if active_only:
+            plans_data = await db.get_active_plans()
+        else:
+            plans_data = await db.get_all_plans(skip=skip, limit=limit)
+        
+        # Convert to response format
+        plans = [
+            PlanSchema(
+                id=p["id"],
+                name=p["name"],
+                display_name=p["display_name"],
+                description=p["description"],
+                price=p["price"],
+                currency=p["currency"],
+                billing=p["billing"],
+                features=p["features"] if p.get("features") else [],
+                max_surveys=p.get("max_surveys"),
+                max_responses=p.get("max_responses"),
+                priority_support=p.get("priority_support", False),
+                api_access=p.get("api_access", False),
+                is_active=p.get("is_active", True),
+                created_at=p["created_at"],
+                updated_at=p["updated_at"]
+            )
+            for p in plans_data
+        ]
+        
+        return plans
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get plans: {str(e)}"
+        )
 
 
 @router.get("/available", response_model=List[PlanSchema])
 async def get_available_plans(
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    db: LightweightDBService = Depends(get_lightweight_db),
 ):
     """Get available plans for user - matches TypeScript API pattern"""
     try:
-        plans = await PlanService.get_plans(db, 0, 100, True)  # Get all active plans
+        plans_data = await db.get_active_plans()
+        
+        # Convert to response format
+        plans = [
+            PlanSchema(
+                id=p["id"],
+                name=p["name"],
+                display_name=p["display_name"],
+                description=p["description"],
+                price=p["price"],
+                currency=p["currency"],
+                billing=p["billing"],
+                features=p["features"] if isinstance(p["features"], list) else [],
+                max_surveys=p["max_surveys"],
+                max_responses=p["max_responses"],
+                priority_support=p["priority_support"],
+                api_access=p["api_access"],
+                is_active=p["is_active"],
+                created_at=p["created_at"],
+                updated_at=p["updated_at"]
+            )
+            for p in plans_data
+        ]
+        
         return plans
     except Exception as e:
         raise HTTPException(
@@ -74,8 +119,7 @@ async def get_available_plans(
 @router.get("/{plan_id}", response_model=PlanSchema)
 async def get_plan(
     plan_id: UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    db: LightweightDBService = Depends(get_lightweight_db),
 ):
     """Get a specific plan by ID."""
     plan = await PlanService.get_plan(db, plan_id)
@@ -93,40 +137,35 @@ async def get_plan(
 async def update_plan(
     plan_id: UUID,
     plan_update: PlanUpdate,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    db: LightweightDBService = Depends(get_lightweight_db),
+    current_user: SimpleUser = Depends(get_current_admin_user)
 ):
     """Update a plan. Admin only."""
-    if current_user.role != "admin":
+    try:
+        plan_dict = plan_update.dict(exclude_unset=True)
+        plan_result = await db.update_plan(str(plan_id), plan_dict)
+        
+        if not plan_result:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Plan not found"
+            )
+        
+        return PlanSchema(**plan_result)
+    except Exception as e:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admins can update plans"
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Failed to update plan: {str(e)}"
         )
-    
-    plan = await PlanService.update_plan(db, plan_id, plan_update)
-    
-    if not plan:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Plan not found"
-        )
-    
-    return plan
 
 
 @router.delete("/{plan_id}")
 async def delete_plan(
     plan_id: UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    db: LightweightDBService = Depends(get_lightweight_db),
+    current_user: SimpleUser = Depends(get_current_admin_user)
 ):
     """Delete a plan (soft delete). Admin only."""
-    if current_user.role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admins can delete plans"
-        )
-    
     success = await PlanService.delete_plan(db, plan_id)
     
     if not success:
@@ -142,16 +181,10 @@ async def delete_plan(
 async def assign_plan_to_user(
     user_id: UUID,
     plan_id: UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    db: LightweightDBService = Depends(get_lightweight_db),
+    current_user: SimpleUser = Depends(get_current_admin_user)
 ):
     """Assign a plan to a user. Admin only."""
-    if current_user.role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admins can assign plans"
-        )
-    
     try:
         user_plan = await PlanService.assign_plan_to_user(db, user_id, plan_id)
         return user_plan
@@ -165,8 +198,8 @@ async def assign_plan_to_user(
 @router.get("/users/{user_id}/plan", response_model=UserPlanSchema)
 async def get_user_plan(
     user_id: UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    db: LightweightDBService = Depends(get_lightweight_db),
+    current_user: SimpleUser = Depends(get_current_user)
 ):
     """Get the active plan for a user."""
     # Users can check their own plan, admins can check anyone's
@@ -190,8 +223,8 @@ async def get_user_plan(
 @router.delete("/users/{user_id}/plan")
 async def cancel_user_plan(
     user_id: UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    db: LightweightDBService = Depends(get_lightweight_db),
+    current_user: SimpleUser = Depends(get_current_user)
 ):
     """Cancel a user's active plan."""
     # Users can cancel their own plan, admins can cancel anyone's
@@ -216,16 +249,10 @@ async def cancel_user_plan(
 async def get_plan_users(
     plan_id: UUID,
     active_only: bool = Query(True),
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    db: LightweightDBService = Depends(get_lightweight_db),
+    current_user: SimpleUser = Depends(get_current_admin_user)
 ):
     """Get all users with a specific plan. Admin only."""
-    if current_user.role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admins can view plan users"
-        )
-    
     users = await PlanService.get_plan_users(db, plan_id, active_only)
     return users
 
@@ -234,8 +261,8 @@ async def get_plan_users(
 async def check_user_plan_feature(
     user_id: UUID,
     feature_name: str,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    db: LightweightDBService = Depends(get_lightweight_db),
+    current_user: SimpleUser = Depends(get_current_user)
 ):
     """Check if user's plan includes a specific feature."""
     # Users can check their own features, admins can check anyone's
@@ -257,24 +284,18 @@ async def check_user_plan_feature(
 @router.get("/{plan_id}/stats")
 async def get_plan_stats(
     plan_id: UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    db: LightweightDBService = Depends(get_lightweight_db),
+    current_user: SimpleUser = Depends(get_current_admin_user)
 ):
     """Get usage statistics for a plan. Admin only."""
-    if current_user.role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admins can view plan statistics"
-        )
-    
     stats = await PlanService.get_plan_usage_stats(db, plan_id)
     return stats
 
 
 @router.get("/my-plan", response_model=UserPlanSchema)
 async def get_my_plan(
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    db: LightweightDBService = Depends(get_lightweight_db),
+    current_user: SimpleUser = Depends(get_current_user)
 ):
     """Get the current user's active plan."""
     user_plan = await PlanService.get_user_plan(db, current_user.id)
@@ -291,8 +312,8 @@ async def get_my_plan(
 @router.get("/my-plan/feature/{feature_name}")
 async def check_my_plan_feature(
     feature_name: str,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    db: LightweightDBService = Depends(get_lightweight_db),
+    current_user: SimpleUser = Depends(get_current_user)
 ):
     """Check if current user's plan includes a specific feature."""
     has_feature = await PlanService.check_plan_feature(db, current_user.id, feature_name)

@@ -24,10 +24,10 @@ class ModuleConfigurationService:
     
     # Supported module names
     SUPPORTED_MODULES = [
-        "data_processing_engine",
         "semantic_search_engine", 
         "ai_chat_integration",
-        "survey_suggestions_generation"
+        "survey_suggestions_generation",
+        "survey_builder"
     ]
     
     def __init__(self):

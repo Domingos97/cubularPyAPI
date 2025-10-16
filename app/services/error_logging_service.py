@@ -9,6 +9,7 @@ from typing import Dict, Any, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 
+from app.models.models import Log
 from app.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -31,32 +32,126 @@ class ErrorLoggingService:
         Returns the error_log_id for reference
         """
         try:
-            error_log_id = str(uuid.uuid4())
+            # Create log entry in database
+            log_entry = Log(
+                level="ERROR",
+                action=f"chat_error_{error_type}",
+                user_id=uuid.UUID(user_id) if user_id else None,
+                session_id=uuid.UUID(session_id) if session_id else None,
+                error_message=error_message,
+                details={
+                    'error_type': error_type,
+                    'question': question[:500] if question else None,  # Truncate long questions
+                    'details': details or {}
+                },
+                timestamp=datetime.utcnow()
+                # Note: Removed ip_address=None to avoid INET type issues
+            )
             
-            # Prepare error data
-            error_data = {
-                'error_type': error_type,
-                'error_message': error_message,
-                'user_id': user_id,
-                'session_id': session_id,
-                'question': question[:500] if question else None,  # Truncate long questions
-                'details': details or {},
-                'timestamp': datetime.utcnow().isoformat(),
-                'error_log_id': error_log_id
-            }
+            db.add(log_entry)
+            await db.commit()
+            await db.refresh(log_entry)
             
-            # Log to application logs
-            logger.error(f"Chat Error [{error_log_id}]: {error_type} - {error_message}", 
-                        extra={'error_data': error_data})
+            # Log to console for reference (not file)
+            logger.error(f"Chat Error [{log_entry.id}]: {error_type} - {error_message}", 
+                        extra={'error_data': {
+                            'error_type': error_type,
+                            'user_id': user_id,
+                            'session_id': session_id,
+                            'question': question,
+                            'details': details
+                        }})
             
-            # Store in database (you can create an error_logs table later if needed)
-            # For now, we'll just ensure comprehensive logging
-            
-            return error_log_id
+            return str(log_entry.id)
             
         except Exception as e:
-            logger.error(f"Failed to log error: {e}")
-            return "unknown"
+            # Log to console only if database logging fails
+            logger.error(f"Failed to log error to database: {e}")
+            logger.error(f"Original error: {error_type} - {error_message}")
+            return "db_logging_failed"
+    
+    @staticmethod
+    async def log_api_error(
+        db: AsyncSession,
+        error_message: str,
+        endpoint: str,
+        method: str,
+        status_code: int,
+        user_id: Optional[str] = None,
+        request_body: Optional[Dict[str, Any]] = None,
+        stack_trace: Optional[str] = None
+    ) -> str:
+        """
+        Log API-related errors to database
+        Returns the log entry ID for reference
+        """
+        try:
+            log_entry = Log(
+                level="ERROR",
+                action=f"api_error_{method}_{endpoint}",
+                user_id=uuid.UUID(user_id) if user_id else None,
+                method=method,
+                endpoint=endpoint,
+                status_code=status_code,
+                error_message=error_message,
+                request_body=request_body,
+                stack_trace=stack_trace,
+                timestamp=datetime.utcnow()
+                # Note: Removed ip_address=None to avoid INET type issues
+            )
+            
+            db.add(log_entry)
+            await db.commit()
+            await db.refresh(log_entry)
+            
+            # Log to console for reference (not file)
+            logger.error(f"API Error [{log_entry.id}]: {method} {endpoint} - {error_message}")
+            
+            return str(log_entry.id)
+            
+        except Exception as e:
+            logger.error(f"Failed to log API error to database: {e}")
+            logger.error(f"Original error: {error_message}")
+            return "db_logging_failed"
+    
+    @staticmethod
+    async def log_general_error(
+        db: AsyncSession,
+        error_message: str,
+        error_type: str = "general_error",
+        user_id: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None,
+        stack_trace: Optional[str] = None
+    ) -> str:
+        """
+        Log general application errors to database
+        Returns the log entry ID for reference
+        """
+        try:
+            log_entry = Log(
+                level="ERROR",
+                action=error_type,
+                user_id=uuid.UUID(user_id) if user_id else None,
+                error_message=error_message,
+                details=details,
+                stack_trace=stack_trace,
+                timestamp=datetime.utcnow()
+                # Note: Removed ip_address=None to avoid INET type issues
+            )
+            
+            db.add(log_entry)
+            await db.commit()
+            await db.refresh(log_entry)
+            
+            # Log to console for reference (not file)
+            logger.error(f"General Error [{log_entry.id}]: {error_type} - {error_message}")
+            
+            return str(log_entry.id)
+            
+        except Exception as e:
+            logger.error(f"Failed to log general error to database: {e}")
+            logger.error(f"Original error: {error_message}")
+            return "db_logging_failed"
     
     @staticmethod
     def format_error_for_frontend(

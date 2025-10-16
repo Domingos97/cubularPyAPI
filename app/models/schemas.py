@@ -54,6 +54,7 @@ class User(BaseSchema):
 class UserWithAccess(User):
     user_survey_access: Optional[List['UserSurveyAccessWithDetails']] = None
     user_survey_file_access: Optional[List['UserSurveyFileAccessWithDetails']] = None
+    user_plans: Optional[List['UserPlanWithDetails']] = None
 
 class UserBase(BaseSchema):
     email: EmailStr
@@ -65,6 +66,8 @@ class UserCreate(UserBase):
 
 class UserUpdate(BaseSchema):
     username: Optional[str] = None
+    email: Optional[EmailStr] = None
+    password: Optional[str] = None
     language: Optional[str] = None
     preferred_personality: Optional[str] = None
     welcome_popup_dismissed: Optional[bool] = None
@@ -85,6 +88,17 @@ class Token(BaseSchema):
     refreshToken: str
     tokenType: str = "Bearer"
     expiresIn: int
+    
+    class Config:
+        from_attributes = True
+        use_enum_values = True
+
+class LoginResponse(BaseSchema):
+    accessToken: str
+    refreshToken: str
+    tokenType: str = "Bearer"
+    expiresIn: int  # Expiration time in seconds
+    user: Optional[dict] = None  # Flexible user data
     
     class Config:
         from_attributes = True
@@ -729,15 +743,11 @@ class PlanBase(BaseSchema):
     price: Optional[float] = None
     currency: str = "USD"
     billing: Optional[str] = None
+    features: Optional[List[str]] = None  # List of feature strings
     max_surveys: Optional[int] = None
     max_responses: Optional[int] = None
-    max_users: Optional[int] = None
-    max_storage_gb: Optional[int] = None
-    ai_analysis: bool = False
     priority_support: bool = False
-    custom_branding: bool = False
     api_access: bool = False
-    is_popular: bool = False
 
 class PlanCreate(PlanBase):
     features: Optional[List[str]] = None  # List of feature strings
@@ -752,18 +762,12 @@ class PlanUpdate(BaseSchema):
     features: Optional[List[str]] = None
     max_surveys: Optional[int] = None
     max_responses: Optional[int] = None
-    max_users: Optional[int] = None
-    max_storage_gb: Optional[int] = None
-    ai_analysis: Optional[bool] = None
     priority_support: Optional[bool] = None
-    custom_branding: Optional[bool] = None
     api_access: Optional[bool] = None
     is_active: Optional[bool] = None
-    is_popular: Optional[bool] = None
 
 class Plan(PlanBase):
     id: uuid.UUID
-    features: Optional[List[str]] = None  # List of feature strings
     is_active: bool
     created_at: datetime
     updated_at: datetime
@@ -772,9 +776,15 @@ class Plan(PlanBase):
     def parse_features(cls, v):
         """Parse features from JSONB."""
         if v is None:
-            return None
+            return []
         if isinstance(v, list):
             return v
+        if isinstance(v, str):
+            try:
+                parsed = json.loads(v)
+                return parsed if isinstance(parsed, list) else []
+            except:
+                return []
         return []
 
 class UserPlanBase(BaseSchema):
@@ -801,101 +811,13 @@ class UserPlan(UserPlanBase):
     created_at: datetime
     updated_at: datetime
 
-# Survey suggestion schemas
-class SurveySuggestionBase(BaseSchema):
-    suggestion_text: str = Field(..., description="AI-generated suggestion text")
-    category: Optional[str] = Field(None, description="Suggestion category")
-    confidence_score: Optional[float] = Field(0.5, description="AI confidence score (0.0-1.0)")
-    language_code: str = "en"
+class UserPlanWithDetails(UserPlan):
+    """UserPlan with associated plan details"""
+    plans: Plan
 
-class SurveySuggestionCreate(SurveySuggestionBase):
-    survey_id: uuid.UUID
+# Enhanced chat schemas REMOVED - No longer needed with streamlined_chat approach
 
-class SurveySuggestionUpdate(BaseSchema):
-    suggestion_text: Optional[str] = None
-    category: Optional[str] = None
-    confidence_score: Optional[float] = None
-    is_active: Optional[bool] = None
-
-class SurveySuggestionResponse(SurveySuggestionBase):
-    id: uuid.UUID
-    survey_id: uuid.UUID
-    ai_personality_id: Optional[uuid.UUID]
-    generated_by: Optional[uuid.UUID]
-    is_active: bool
-    created_at: datetime
-    updated_at: datetime
-
-# Survey analytics schemas
-class SurveyAnalyticsBase(BaseSchema):
-    total_files: int = 0
-    total_file_size: int = 0
-    total_suggestions: int = 0
-    total_chat_sessions: int = 0
-    total_chat_messages: int = 0
-    analysis_status: str = "pending"
-
-class SurveyAnalyticsUpdate(BaseSchema):
-    total_files: Optional[int] = None
-    total_file_size: Optional[int] = None
-    total_suggestions: Optional[int] = None
-    total_chat_sessions: Optional[int] = None
-    total_chat_messages: Optional[int] = None
-    analysis_status: Optional[str] = None
-    analytics_metadata: Optional[str] = None
-
-class SurveyAnalyticsResponse(SurveyAnalyticsBase):
-    id: uuid.UUID
-    survey_id: uuid.UUID
-    last_activity: Optional[datetime]
-    analytics_metadata: Optional[str]
-    created_at: datetime
-    updated_at: datetime
-
-# Enhanced chat schemas
-class EnhancedChatSessionBase(BaseSchema):
-    session_name: Optional[str] = None
-    survey_ids: List[uuid.UUID] = Field(..., description="Array of survey IDs for RAG context")
-    personality_id: Optional[uuid.UUID] = None
-    language_code: str = "en"
-    context_metadata: Optional[str] = None
-
-class EnhancedChatSessionCreate(EnhancedChatSessionBase):
-    pass
-
-class EnhancedChatSessionUpdate(BaseSchema):
-    session_name: Optional[str] = None
-    survey_ids: Optional[List[uuid.UUID]] = None
-    personality_id: Optional[uuid.UUID] = None
-    is_active: Optional[bool] = None
-    context_metadata: Optional[str] = None
-
-class EnhancedChatSessionResponse(EnhancedChatSessionBase):
-    id: uuid.UUID
-    user_id: uuid.UUID
-    is_active: bool
-    created_at: datetime
-    updated_at: datetime
-
-class EnhancedChatMessageBase(BaseSchema):
-    role: str = Field(..., description="Message role: 'user' or 'assistant'")
-    content: str = Field(..., description="Message content")
-    search_results: Optional[str] = Field(None, description="JSON of RAG search results")
-    confidence_score: Optional[float] = None
-    processing_time: Optional[int] = None
-    tokens_used: Optional[int] = None
-    language_detected: Optional[str] = None
-
-class EnhancedChatMessageCreate(EnhancedChatMessageBase):
-    session_id: uuid.UUID
-
-class EnhancedChatMessageResponse(EnhancedChatMessageBase):
-    id: uuid.UUID
-    session_id: uuid.UUID
-    created_at: datetime
-    updated_at: datetime
-
-# Request/Response schemas for survey suggestion generation
+# Request/Response schemas for survey suggestion generation  
 class GenerateSuggestionsRequest(BaseSchema):
     survey_id: uuid.UUID
     description: str = Field(..., description="Survey description for context")
@@ -904,7 +826,7 @@ class GenerateSuggestionsRequest(BaseSchema):
     file_content: Optional[Dict[str, Any]] = Field(None, description="Optional file content for context")
 
 class GenerateSuggestionsResponse(BaseSchema):
-    suggestions: List[SurveySuggestionResponse]
+    suggestions: List[str]  # Simplified to match SuggestionsResponse pattern
     generation_time: float
     total_suggestions: int
 

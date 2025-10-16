@@ -3,10 +3,11 @@ Services module - contains all business logic services
 """
 
 # Core services
-from .auth_service import auth_service
-from .simple_ai_service import simple_ai as ai_service
+from .lightweight_auth_service import auth_service
+# from .simple_ai_service import simple_ai as ai_service  # TODO: Convert to lightweight_db
 from .survey_service import survey_service
 from .embedding_service import embedding_service
+from .survey_indexing_service import survey_indexing_service
 
 # Enhanced services (ported from TypeScript)
 from .background_queue_service import background_queue, add_survey_analysis_job, add_file_processing_job
@@ -23,6 +24,7 @@ __all__ = [
     'ai_service', 
     'survey_service',
     'embedding_service',
+    'survey_indexing_service',
     
     # Enhanced services
     'background_queue',

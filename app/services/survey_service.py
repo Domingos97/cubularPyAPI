@@ -353,24 +353,27 @@ class SurveyService(BaseService[Survey, SurveyCreate, SurveyUpdate]):
             logger.info(f"File processed successfully: {filename} for survey {survey_id}")
             
             # Automatically generate embeddings and pickle files in survey_data directory
-            # NOTE: Fast search service handles pickle files directly, no indexing needed
             try:
-                # vector_service = get_vector_search_service()
-                # indexing_success = await vector_service.index_survey_file(
-                #     db=db,
-                #     survey_id=str(survey_id),
-                #     file_id=str(file_id),
-                #     force_reindex=False
-                # )
+                from app.services.survey_indexing_service import survey_indexing_service
                 
-                # if indexing_success:
-                #     logger.info(f"Successfully created embeddings and pickle file for survey {survey_id}, file {file_id}")
-                # else:
-                #     logger.warning(f"Failed to create embeddings for survey {survey_id}, file {file_id}")
-                logger.info(f"Survey file uploaded - fast_search_service will handle search directly from pickle files")
+                indexing_success = await survey_indexing_service.index_survey_file(
+                    survey_id=str(survey_id),
+                    file_id=str(file_id),
+                    processed_data=processing_result,
+                    db=db
+                )
+                
+                if indexing_success:
+                    logger.info(f"Successfully created embeddings and pickle file for survey {survey_id}, file {file_id}")
+                else:
+                    logger.warning(f"Failed to create embeddings for survey {survey_id}, file {file_id}")
+                    
             except Exception as embedding_error:
                 # Don't fail the entire upload if embedding generation fails
                 logger.error(f"Embedding generation failed for survey {survey_id}, file {file_id}: {str(embedding_error)}")
+                # Log the full traceback for debugging
+                import traceback
+                logger.error(f"Full traceback: {traceback.format_exc()}")
             
         except Exception as e:
             # Update file record with error
@@ -539,7 +542,6 @@ class SurveyService(BaseService[Survey, SurveyCreate, SurveyUpdate]):
         """Check if user has access to survey"""
         from app.services.access_control_service import access_control_service
         from app.models.schemas import AccessType
-        from app.models.models import User
         
         # Check if survey exists
         survey = await self.get_by_id(db, survey_id)
@@ -569,7 +571,6 @@ class SurveyService(BaseService[Survey, SurveyCreate, SurveyUpdate]):
         user_id: uuid.UUID
     ) -> List[Dict[str, Any]]:
         """Get user's file access permissions for a survey"""
-        from app.models.models import User
         
         # Get user to check if admin
         user_query = select(User).options(selectinload(User.role)).where(User.id == user_id)

@@ -1,23 +1,20 @@
 """
-Streamlined Chat Endpoint - Ultra-Fast Performance
-=================================================
-Question → Search → AI → Response with minimal overhead.
-No Pydantic validation, direct dict responses like TypeScript API.
+Streamlined Chat Endpoint - Session Management
+==============================================
+Lightweight session management and chat utilities.
 """
 
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, status, Query, BackgroundTasks, Body
-from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field
-import time
-import asyncio
+from fastapi import APIRouter, Depends, Query, HTTPException, status
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 from datetime import datetime
 
-from app.services.lightweight_db_service import get_lightweight_db, LightweightDBService, log_chat_analytics_background
-from app.services.simple_ai_service import get_simple_ai, SimpleAIService, process_analytics_background
+from app.services.lightweight_db_service import get_lightweight_db, LightweightDBService
+from app.services.simple_ai_service import get_simple_ai, SimpleAIService
 from app.services.fast_search_service import FastSearchService
-from app.services.streamlined_responses import StreamlinedResponses, StreamingResponseHelper, clean_db_response
-from app.core.lightweight_dependencies import get_current_user, SimpleUser
+from app.services.streamlined_responses import StreamlinedResponses, clean_db_response
+from app.core.lightweight_dependencies import get_current_regular_user, SimpleUser
 from app.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -27,295 +24,7 @@ router = APIRouter()
 # Initialize services
 fast_search = FastSearchService()
 
-
-class CreateSessionRequest(BaseModel):
-    title: str = "New Chat"
-    survey_ids: List[str] = Field(default=[], alias="surveyIds")
-    category: Optional[str] = None
-    personality_id: Optional[str] = Field(default=None, alias="personalityId")
-    selected_file_ids: List[str] = Field(default=[], alias="fileIds")
-    
-    class Config:
-        populate_by_name = True  # Allow both field names and aliases
-
-
-@router.post("/quick-stream")
-async def quick_chat_stream(
-    session_id: str,
-    message: str,
-    include_search: bool = True,
-    provider: str = "openai",
-    model: str = "gpt-4o-mini",
-    temperature: float = 0.7,
-    current_user: SimpleUser = Depends(get_current_user),
-    db: LightweightDBService = Depends(get_lightweight_db),
-    ai: SimpleAIService = Depends(get_simple_ai),
-    background_tasks: BackgroundTasks = BackgroundTasks()
-):
-    """
-    Ultra-fast streaming chat completion - TypeScript API style
-    Returns streaming JSON for real-time response building
-    """
-    
-    async def generate_stream():
-        start_time = time.time()
-        
-        try:
-            # Fast validation - parallel with search
-            tasks = [db.get_chat_session(session_id, current_user.id)]
-            
-            if include_search:
-                tasks.append(_perform_search_if_needed(db, session_id, message))
-            
-            results = await asyncio.gather(*tasks)
-            session = results[0]
-            search_context = results[1] if include_search else None
-            
-            if not session:
-                yield f"data: {StreamlinedResponses.error_response('Session not found', 'session_not_found', 404)}\n\n"
-                return
-            
-            # Get conversation history and build context
-            conversation_history = await db.get_recent_messages(session_id, limit=6)
-            
-            # Build AI messages
-            system_prompt = ai.default_system_prompt
-            search_text = ""
-            
-            if search_context and search_context.get("responses"):
-                top_results = search_context["responses"][:5]
-                search_text = "\n".join([f"- {r['text'][:200]}..." for r in top_results])
-            
-            messages = ai.build_messages(
-                system_prompt=system_prompt,
-                conversation_history=conversation_history,
-                current_question=message,
-                search_context=search_text if search_text else None
-            )
-            
-            # Stream AI response
-            user_msg_id = await db.save_message(session_id, "user", message)
-            
-            # Create streaming generator
-            ai_response = ""
-            ai_msg_id = None
-            
-            # For now, get full response and simulate streaming
-            # TODO: Implement actual streaming from AI providers
-            full_ai_response = await ai.generate_response(
-                messages=messages,
-                provider=provider,
-                model=model,
-                temperature=temperature,
-                max_tokens=1000
-            )
-            
-            # Save AI message
-            ai_msg_id = await db.save_message(
-                session_id, "assistant", full_ai_response,
-                {"provider": provider, "model": model}
-            )
-            
-            # Stream the response in chunks (simulate real streaming)
-            chunk_size = 20
-            for i in range(0, len(full_ai_response), chunk_size):
-                chunk = full_ai_response[i:i + chunk_size]
-                ai_response += chunk
-                
-                yield f"data: {{\n"
-                yield f'  "type": "content",\n'
-                yield f'  "content": "{chunk.replace('"', '\\"')}",\n'
-                yield f'  "user_message_id": "{user_msg_id}",\n'
-                yield f'  "ai_message_id": "{ai_msg_id}"\n'
-                yield f"}}\n\n"
-                
-                # Small delay to simulate streaming
-                await asyncio.sleep(0.05)
-            
-            # Final completion
-            processing_time = (time.time() - start_time) * 1000
-            
-            yield f"data: {{\n"
-            yield f'  "type": "complete",\n'
-            yield f'  "full_response": "{full_ai_response.replace('"', '\\"')}",\n'
-            yield f'  "processing_time": {processing_time:.2f},\n'
-            yield f'  "search_results": {search_context or "null"},\n'
-            yield f'  "user_message_id": "{user_msg_id}",\n'
-            yield f'  "ai_message_id": "{ai_msg_id}"\n'
-            yield f"}}\n\n"
-            
-            # Background analytics
-            background_tasks.add_task(
-                process_analytics_background,
-                session_id, message, full_ai_response, processing_time, provider, model
-            )
-            
-        except Exception as e:
-            yield f"data: {StreamlinedResponses.error_response(f'Stream error: {str(e)}', 'streaming_error', 500)}\n\n"
-    
-    return StreamingResponse(
-        generate_stream(),
-        media_type="text/plain",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "Content-Type": "text/plain; charset=utf-8"
-        }
-    )
-
-
-@router.post("/quick-completion")
-async def quick_chat_completion(
-    session_id: str,
-    message: str,
-    include_search: bool = True,
-    provider: str = "openai",
-    model: str = "gpt-4o-mini",
-    temperature: float = 0.7,
-    current_user: SimpleUser = Depends(get_current_user),
-    db: LightweightDBService = Depends(get_lightweight_db),
-    ai: SimpleAIService = Depends(get_simple_ai),
-    background_tasks: BackgroundTasks = BackgroundTasks()
-):
-    """
-    Ultra-fast chat completion endpoint
-    
-    Flow: Question → Search → AI → Response
-    - Minimal validation
-    - Parallel operations where possible
-    - Background analytics
-    - Response caching
-    """
-    start_time = time.time()
-    
-    try:
-        # Step 1: Parallel session validation and search (if needed)
-        tasks = [
-            db.get_chat_session(session_id, current_user.id)
-        ]
-        
-        if include_search:
-            # Add search task to run in parallel
-            tasks.append(_perform_search_if_needed(db, session_id, message))
-        
-        results = await asyncio.gather(*tasks)
-        session = results[0]
-        search_context = results[1] if include_search else None
-        
-        if not session:
-            return JSONResponse(
-                status_code=404,
-                content=StreamlinedResponses.error_response(
-                    "Chat session not found",
-                    "session_not_found",
-                    404
-                )
-            )
-        
-        # Step 2: Get conversation history (lightweight query)
-        conversation_history = await db.get_recent_messages(session_id, limit=6)  # Reduced from 10
-        
-        # Step 3: Build AI messages (enhanced context)
-        system_prompt = ai.default_system_prompt
-        search_text = ""
-        
-        if search_context and search_context.get("responses"):
-            # Build structured context similar to TypeScript API
-            responses = search_context["responses"]
-            total_matches = search_context.get("metadata", {}).get("total_matches", len(responses))
-            
-            search_text = f"Processing complete survey dataset - found {total_matches} total data points for analysis\n"
-            search_text += f"Most relevant responses (top {len(responses)} matches):\n\n"
-            search_text += "Survey responses:\n"
-            
-            for i, response in enumerate(responses):
-                similarity = response.get('value', 0) * 100
-                search_text += f"{i + 1}. \"{response.get('text', '')}\" (relevance: {similarity:.1f}%)\n"
-            
-            # Add demographics if available
-            if search_context.get("demographics"):
-                search_text += f"\nDemographics: {search_context['demographics']}\n"
-                
-            # Add psychology insights if available  
-            if search_context.get("psychology"):
-                search_text += f"\nPsychological insights: {search_context['psychology']}\n"
-        
-        messages = ai.build_messages(
-            system_prompt=system_prompt,
-            conversation_history=conversation_history,
-            current_question=message,
-            search_context=search_text if search_text else None
-        )
-        
-        # Step 4: Generate AI response (cached)
-        ai_response = await ai.generate_response(
-            messages=messages,
-            provider=provider,
-            model=model,
-            temperature=temperature,
-            max_tokens=1000
-        )
-        
-        # Step 5: Save messages (single transaction)
-        user_msg_id, ai_msg_id = await db.save_message_pair(
-            session_id=session_id,
-            user_content=message,
-            ai_content=ai_response,
-            ai_metadata={
-                "provider": provider,
-                "model": model,
-                "temperature": temperature,
-                "search_results_count": len(search_context.get("responses", [])) if search_context else 0,
-                "processing_time": time.time() - start_time
-            }
-        )
-        
-        # Step 6: Update session title if first exchange (background)
-        if len(conversation_history) == 0:
-            title = message[:50] + "..." if len(message) > 50 else message
-            background_tasks.add_task(db.update_session_title, session_id, title)
-        
-        processing_time = (time.time() - start_time) * 1000  # Convert to ms
-        
-        # Step 7: Background analytics (non-blocking)
-        background_tasks.add_task(
-            process_analytics_background,
-            session_id, message, ai_response, processing_time, provider, model
-        )
-        
-        background_tasks.add_task(
-            log_chat_analytics_background,
-            session_id, message, processing_time, "fast_search" if include_search else "direct",
-            len(search_context.get("responses", [])) if search_context else 0
-        )
-        
-        # Return streamlined response - no Pydantic overhead
-        return JSONResponse(
-            content=StreamlinedResponses.chat_completion_response(
-                user_message_id=user_msg_id,
-                ai_response=ai_response,
-                ai_message_id=ai_msg_id,
-                processing_time=processing_time,
-                search_results=search_context,
-                provider=provider,
-                model=model,
-                cached=False  # TODO: Track cache hits
-            )
-        )
-        
-    except Exception as e:
-        processing_time = (time.time() - start_time) * 1000
-        logger.error(f"Quick chat completion error: {str(e)} (took {processing_time:.1f}ms)")
-        
-        return JSONResponse(
-            status_code=500,
-            content=StreamlinedResponses.error_response(
-                "Failed to generate response",
-                "chat_completion_error",
-                500,
-                str(e)
-            )
-        )
+# Removed heavy Pydantic models for maximum performance
 
 
 async def _perform_search_if_needed(db: LightweightDBService, session_id: str, query: str) -> Optional[dict]:
@@ -382,14 +91,18 @@ async def _perform_search_if_needed(db: LightweightDBService, session_id: str, q
 @router.get("/sessions/{session_id}/quick")
 async def get_quick_session(
     session_id: str,
-    current_user: SimpleUser = Depends(get_current_user),
+    current_user: SimpleUser = Depends(get_current_regular_user),
     db: LightweightDBService = Depends(get_lightweight_db)
 ):
     """Get chat session with recent messages - lightweight version"""
+    # DEBUGGING: Log every request to this endpoint to find infinite loop
+    logger.warning(f"🔍 DEBUGGING: Quick session endpoint called for session {session_id} by user {current_user.id}")
+    
     try:
         # Get session info
         session = await db.get_chat_session(session_id, current_user.id)
         if not session:
+            logger.warning(f"🔍 DEBUGGING: Session {session_id} not found for user {current_user.id}")
             return JSONResponse(
                 status_code=404,
                 content=StreamlinedResponses.error_response(
@@ -401,6 +114,8 @@ async def get_quick_session(
         
         # Get recent messages
         messages = await db.get_recent_messages(session_id, limit=20)
+        
+        logger.info(f"🔍 DEBUGGING: Successfully retrieved session {session_id} with {len(messages)} messages")
         
         # Clean response without Pydantic overhead
         return JSONResponse(
@@ -427,7 +142,7 @@ async def get_quick_session(
 async def get_user_chat_sessions(
     limit: int = Query(default=50, le=100),
     surveyId: Optional[str] = Query(default=None, alias="survey_id"),
-    current_user: SimpleUser = Depends(get_current_user),
+    current_user: SimpleUser = Depends(get_current_regular_user),
     db: LightweightDBService = Depends(get_lightweight_db)
 ):
     """Get all chat sessions for the current user, optionally filtered by survey"""
@@ -485,7 +200,7 @@ async def create_quick_session(
     survey_ids: List[str] = None,
     category: str = None,
     personality_id: str = None,
-    current_user: SimpleUser = Depends(get_current_user),
+    current_user: SimpleUser = Depends(get_current_regular_user),
     db: LightweightDBService = Depends(get_lightweight_db)
 ):
     """Create new chat session - lightweight version"""
@@ -541,7 +256,7 @@ class CreateChatSessionRequest(BaseModel):
 @router.post("/sessions")
 async def create_chat_session(
     request: CreateChatSessionRequest,
-    current_user: SimpleUser = Depends(get_current_user),
+    current_user: SimpleUser = Depends(get_current_regular_user),
     db: LightweightDBService = Depends(get_lightweight_db)
 ):
     """Create new chat session - main endpoint that matches TypeScript API"""
@@ -551,7 +266,8 @@ async def create_chat_session(
                    f"category={request.category}, personality_id={request.personality_id}, "
                    f"selected_file_ids={request.selected_file_ids}")
         
-        if not request.survey_ids:
+        # Allow empty survey_ids for survey_builder category
+        if not request.survey_ids and request.category != 'survey_builder':
             return JSONResponse(
                 status_code=400,
                 content={"error": "Survey IDs array is required"}
@@ -599,8 +315,8 @@ async def create_chat_session(
 
 @router.post("/sessions/create-optimized")
 async def create_optimized_session(
-    request: CreateSessionRequest,
-    current_user: SimpleUser = Depends(get_current_user),
+    request: CreateChatSessionRequest,
+    current_user: SimpleUser = Depends(get_current_regular_user),
     db: LightweightDBService = Depends(get_lightweight_db)
 ):
     """Create new optimized chat session - alias for quick session creation"""
@@ -619,7 +335,7 @@ async def create_optimized_session(
             selected_file_ids=request.selected_file_ids or []
         )
         
-        # Enhanced response for frontend compatibility
+        # Clean response with consistent field naming
         session_data = StreamlinedResponses.session_response(
             session_id=session_id,
             title=request.title,
@@ -632,9 +348,7 @@ async def create_optimized_session(
         return JSONResponse(
             content={
                 "success": True,
-                "session": session_data,
-                "sessionId": session_id,  # Explicit session ID for frontend
-                **session_data  # Spread session data at root level for compatibility
+                "session": session_data
             }
         )
         
@@ -653,17 +367,17 @@ async def create_optimized_session(
 
 @router.get("/cache/stats")
 async def get_cache_stats(
-    current_user: SimpleUser = Depends(get_current_user),
+    current_user: SimpleUser = Depends(get_current_regular_user),
     ai: SimpleAIService = Depends(get_simple_ai)
 ):
-    """Get cache statistics for monitoring"""
+    """Get cache statistics for monitoring (simplified)"""
     return JSONResponse(
         content=StreamlinedResponses.cache_stats_response(
-            ai_cache_size=len(ai.response_cache),
-            ai_cache_hits=getattr(ai.response_cache, 'hits', 0),
-            ai_cache_misses=getattr(ai.response_cache, 'misses', 0),
-            search_cache_size=len(fast_search.survey_cache),
-            embedding_cache_size=len(fast_search.embedding_cache)
+            ai_cache_size=len(ai.config_cache),  # Only config cache now
+            ai_cache_hits=0,  # Removed response cache
+            ai_cache_misses=0,  # Removed response cache
+            search_cache_size=len(fast_search.survey_cache._cache),
+            embedding_cache_size=0  # Removed embedding cache
         )
     )
 
@@ -681,7 +395,7 @@ class SaveMessageRequest(BaseModel):
 async def save_chat_message(
     session_id: str,
     message_data: SaveMessageRequest,
-    current_user: SimpleUser = Depends(get_current_user),
+    current_user: SimpleUser = Depends(get_current_regular_user),
     db: LightweightDBService = Depends(get_lightweight_db)
 ):
     """
@@ -766,7 +480,7 @@ async def save_chat_message(
 async def get_chat_messages(
     session_id: str,
     limit: int = Query(50, ge=1, le=100),
-    current_user: SimpleUser = Depends(get_current_user),
+    current_user: SimpleUser = Depends(get_current_regular_user),
     db: LightweightDBService = Depends(get_lightweight_db)
 ):
     """
@@ -814,17 +528,17 @@ async def get_chat_messages(
 
 @router.post("/cache/clear")
 async def clear_caches(
-    current_user: SimpleUser = Depends(get_current_user),
+    current_user: SimpleUser = Depends(get_current_regular_user),
     ai: SimpleAIService = Depends(get_simple_ai)
 ):
-    """Clear all caches - useful for development"""
+    """Clear caches - useful for development (simplified)"""
     ai.clear_cache()
     fast_search.survey_cache.clear()
-    fast_search.embedding_cache.clear()
+    # Removed embedding_cache as it's no longer used
     
     return JSONResponse(
         content=StreamlinedResponses.success_response(
-            "All caches cleared"
+            "Caches cleared"
         )
     )
 
@@ -832,7 +546,7 @@ async def clear_caches(
 @router.delete("/sessions/{session_id}")
 async def delete_chat_session(
     session_id: str,
-    current_user: SimpleUser = Depends(get_current_user),
+    current_user: SimpleUser = Depends(get_current_regular_user),
     db: LightweightDBService = Depends(get_lightweight_db)
 ):
     """Delete a chat session and all its messages - matches TypeScript API"""
@@ -876,7 +590,7 @@ async def delete_chat_session(
 @router.delete("/sessions/{session_id}")
 async def delete_session_alternative(
     session_id: str,
-    current_user: SimpleUser = Depends(get_current_user),
+    current_user: SimpleUser = Depends(get_current_regular_user),
     db: LightweightDBService = Depends(get_lightweight_db)
 ):
     """Alternative delete endpoint to match TypeScript API route pattern"""

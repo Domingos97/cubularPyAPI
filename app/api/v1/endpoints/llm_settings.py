@@ -1,19 +1,15 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query
-from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List, Optional
 import uuid
 
-from app.core.database import get_db
-from app.core.dependencies import get_current_user, get_current_admin_user
+from app.services.lightweight_db_service import get_lightweight_db, LightweightDBService
+from app.core.lightweight_dependencies import  get_current_user, get_current_admin_user, SimpleUser
 from app.models.schemas import (
     LLMSettingCreate,
     LLMSettingUpdate,
     LLMSettingResponse,
-    SuccessResponse,
-    ErrorResponse
+    SuccessResponse
 )
-from app.models.models import User
-from app.services.llm_settings_service import llm_settings_service
 from app.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -25,8 +21,7 @@ async def get_llm_settings(
     provider: Optional[str] = Query(None, description="Filter by provider"),
     skip: int = 0,
     limit: int = 100,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_admin_user)
+    db: LightweightDBService = Depends(get_lightweight_db)
 ):
     """
     Get all LLM settings (Admin only)
@@ -39,13 +34,27 @@ async def get_llm_settings(
     """
     try:
         if provider:
-            settings = await llm_settings_service.get_settings_by_provider(db, provider)
-            return [settings] if settings else []
+            # Get all settings and filter by provider (simplified approach)
+            all_settings = await db.get_all_llm_settings(skip=0, limit=1000)
+            settings_data = [s for s in all_settings if s.get("provider") == provider]
         else:
-            settings = await llm_settings_service.get_all_settings(
-                db, skip=skip, limit=limit
+            settings_data = await db.get_all_llm_settings(skip=skip, limit=limit)
+        
+        # Convert to response format
+        settings = [
+            LLMSettingResponse(
+                id=str(s["id"]),
+                provider=s["provider"],
+                active=s.get("active", True),
+                api_key_configured=bool(s.get("api_key")),
+                created_by=str(s["created_by"]) if s.get("created_by") else None,
+                created_at=s["created_at"] if s.get("created_at") else None,
+                updated_at=s["updated_at"] if s.get("updated_at") else None
             )
-            return settings
+            for s in settings_data
+        ]
+        
+        return settings
         
     except Exception as e:
         logger.error(f"Error retrieving LLM settings: {str(e)}")
@@ -58,8 +67,8 @@ async def get_llm_settings(
 @router.get("/{setting_id}", response_model=LLMSettingResponse)
 async def get_llm_setting_by_id(
     setting_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_admin_user)
+    db: LightweightDBService = Depends(get_lightweight_db),
+    current_user: SimpleUser = Depends(get_current_admin_user)
 ):
     """
     Get specific LLM setting by ID (Admin only)
@@ -69,13 +78,23 @@ async def get_llm_setting_by_id(
     Returns the LLM setting details (API key is masked)
     """
     try:
-        setting = await llm_settings_service.get_setting_by_id(db, setting_id)
+        setting_data = await db.get_llm_setting_by_id(str(setting_id))
         
-        if not setting:
+        if not setting_data:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="LLM setting not found"
             )
+        
+        setting = LLMSettingResponse(
+            id=str(setting_data["id"]),
+            provider=setting_data["provider"],
+            active=setting_data.get("active", True),
+            api_key_configured=bool(setting_data.get("api_key")),
+            created_by=str(setting_data["created_by"]) if setting_data.get("created_by") else None,
+            created_at=setting_data["created_at"] if setting_data.get("created_at") else None,
+            updated_at=setting_data["updated_at"] if setting_data.get("updated_at") else None
+        )
         
         logger.info(f"Retrieved LLM setting {setting_id} for admin {current_user.id}")
         return setting
@@ -93,8 +112,8 @@ async def get_llm_setting_by_id(
 @router.post("/", response_model=LLMSettingResponse, status_code=status.HTTP_201_CREATED)
 async def create_llm_setting(
     setting_data: LLMSettingCreate,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_admin_user)
+    db: LightweightDBService = Depends(get_lightweight_db),
+    current_user: SimpleUser = Depends(get_current_admin_user)
 ):
     """
     Create a new LLM setting (Admin only)
@@ -105,8 +124,19 @@ async def create_llm_setting(
     Returns the created LLM setting
     """
     try:
-        setting = await llm_settings_service.create_setting(
-            db, setting_data, created_by=current_user.id
+        setting_dict = setting_data.dict()
+        setting_dict['created_by'] = current_user.id
+        
+        setting_result = await db.create_llm_setting(setting_dict)
+        
+        setting = LLMSettingResponse(
+            id=str(setting_result["id"]),
+            provider=setting_result["provider"],
+            active=setting_result.get("active", True),
+            api_key_configured=bool(setting_result.get("api_key")),
+            created_by=str(setting_result["created_by"]) if setting_result.get("created_by") else None,
+            created_at=setting_result["created_at"] if setting_result.get("created_at") else None,
+            updated_at=setting_result["updated_at"] if setting_result.get("updated_at") else None
         )
         
         logger.info(f"Created LLM setting {setting.id} for provider {setting.provider} by admin {current_user.id}")
@@ -130,8 +160,8 @@ async def create_llm_setting(
 async def update_llm_setting(
     setting_id: uuid.UUID,
     setting_data: LLMSettingUpdate,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_admin_user)
+    db: LightweightDBService = Depends(get_lightweight_db),
+    current_user: SimpleUser = Depends(get_current_admin_user)
 ):
     """
     Update an existing LLM setting (Admin only)
@@ -143,15 +173,24 @@ async def update_llm_setting(
     Returns the updated LLM setting
     """
     try:
-        setting = await llm_settings_service.update_setting(
-            db, setting_id, setting_data
-        )
+        setting_dict = setting_data.dict(exclude_unset=True)
+        setting_result = await db.update_llm_setting(str(setting_id), setting_dict)
         
-        if not setting:
+        if not setting_result:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="LLM setting not found"
             )
+        
+        setting = LLMSettingResponse(
+            id=str(setting_result["id"]),
+            provider=setting_result["provider"],
+            active=setting_result.get("active", True),
+            api_key_configured=bool(setting_result.get("api_key")),
+            created_by=str(setting_result["created_by"]) if setting_result.get("created_by") else None,
+            created_at=setting_result["created_at"] if setting_result.get("created_at") else None,
+            updated_at=setting_result["updated_at"] if setting_result.get("updated_at") else None
+        )
         
         logger.info(f"Updated LLM setting {setting_id} by admin {current_user.id}")
         return setting
@@ -175,8 +214,8 @@ async def update_llm_setting(
 @router.post("/upsert", response_model=LLMSettingResponse)
 async def upsert_llm_setting(
     setting_data: LLMSettingCreate,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_admin_user)
+    db: LightweightDBService = Depends(get_lightweight_db),
+    current_user: SimpleUser = Depends(get_current_admin_user)
 ):
     """
     Create or update LLM setting based on provider (Admin only)
@@ -188,8 +227,19 @@ async def upsert_llm_setting(
     Otherwise, a new setting will be created.
     """
     try:
-        setting = await llm_settings_service.upsert_setting(
-            db, setting_data, created_by=current_user.id
+        setting_dict = setting_data.dict()
+        setting_dict['created_by'] = current_user.id
+        
+        setting_result = await db.upsert_llm_setting(setting_dict)
+        
+        setting = LLMSettingResponse(
+            id=str(setting_result["id"]),
+            provider=setting_result["provider"],
+            active=setting_result.get("active", True),
+            api_key_configured=bool(setting_result.get("api_key")),
+            created_by=str(setting_result["created_by"]) if setting_result.get("created_by") else None,
+            created_at=setting_result["created_at"] if setting_result.get("created_at") else None,
+            updated_at=setting_result["updated_at"] if setting_result.get("updated_at") else None
         )
         
         logger.info(f"Upserted LLM setting for provider {setting.provider} by admin {current_user.id}")
@@ -212,8 +262,8 @@ async def upsert_llm_setting(
 @router.delete("/{setting_id}", response_model=SuccessResponse)
 async def delete_llm_setting(
     setting_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_admin_user)
+    db: LightweightDBService = Depends(get_lightweight_db),
+    current_user: SimpleUser = Depends(get_current_admin_user)
 ):
     """
     Delete an LLM setting (Admin only)
@@ -223,7 +273,7 @@ async def delete_llm_setting(
     Returns success confirmation
     """
     try:
-        success = await llm_settings_service.delete_setting(db, setting_id)
+        success = await db.delete_llm_setting(str(setting_id))
         
         if not success:
             raise HTTPException(
@@ -249,8 +299,8 @@ async def delete_llm_setting(
 @router.get("/{setting_id}/decrypted-api-key")
 async def get_decrypted_api_key(
     setting_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_admin_user)
+    db: LightweightDBService = Depends(get_lightweight_db),
+    current_user: SimpleUser = Depends(get_current_admin_user)
 ):
     """
     Get decrypted API key for a specific setting (Admin only)
@@ -260,9 +310,17 @@ async def get_decrypted_api_key(
     Returns the decrypted API key (use with caution)
     """
     try:
-        api_key = await llm_settings_service.get_decrypted_api_key_by_id(
-            db, setting_id
+        # TODO: Implement decryption in lightweight service
+        # This requires access to encryption service
+        # For now, returning an error message
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="API key decryption not yet implemented in lightweight service"
         )
+        
+        # api_key = await llm_settings_service.get_decrypted_api_key_by_id(
+        #     db, setting_id
+        # )
         
         if api_key is None:
             raise HTTPException(
@@ -286,8 +344,8 @@ async def get_decrypted_api_key(
 @router.get("/provider/{provider}/decrypted-api-key")
 async def get_decrypted_api_key_by_provider(
     provider: str,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_admin_user)
+    db: LightweightDBService = Depends(get_lightweight_db),
+    current_user: SimpleUser = Depends(get_current_admin_user)
 ):
     """
     Get decrypted API key for a specific provider (Admin only)
@@ -297,9 +355,17 @@ async def get_decrypted_api_key_by_provider(
     Returns the decrypted API key for the active setting of this provider
     """
     try:
-        api_key = await llm_settings_service.get_decrypted_api_key_by_provider(
-            db, provider
+        # TODO: Implement decryption in lightweight service
+        # This requires access to encryption service
+        # For now, returning an error message
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="API key decryption not yet implemented in lightweight service"
         )
+        
+        # api_key = await llm_settings_service.get_decrypted_api_key_by_provider(
+        #     db, provider
+        # )
         
         if api_key is None:
             raise HTTPException(
@@ -322,8 +388,8 @@ async def get_decrypted_api_key_by_provider(
 
 @router.get("/active/list", response_model=List[LLMSettingResponse])
 async def get_active_llm_settings(
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    db: LightweightDBService = Depends(get_lightweight_db),
+    current_user: SimpleUser = Depends(get_current_admin_user)
 ):
     """
     Get only active LLM settings (for dropdowns, etc.)
@@ -331,7 +397,20 @@ async def get_active_llm_settings(
     Returns list of active LLM settings with masked API keys
     """
     try:
-        settings = await llm_settings_service.get_active_settings(db)
+        settings_data = await db.get_active_llm_settings()
+        
+        settings = [
+            LLMSettingResponse(
+                id=str(setting["id"]),
+                provider=setting["provider"],
+                active=setting.get("active", True),
+                api_key_configured=bool(setting.get("api_key")),
+                created_by=str(setting["created_by"]) if setting.get("created_by") else None,
+                created_at=setting["created_at"] if setting.get("created_at") else None,
+                updated_at=setting["updated_at"] if setting.get("updated_at") else None
+            )
+            for setting in settings_data
+        ]
         
         logger.info(f"Retrieved {len(settings)} active LLM settings for user {current_user.id}")
         return settings

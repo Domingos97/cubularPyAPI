@@ -52,8 +52,6 @@ class StreamlinedResponses:
             "context": {
                 "totalMatches": search_results.get("metadata", {}).get("total_matches", 0) if search_results else 0,
                 "exactMatches": len(search_results.get("responses", [])) if search_results else 0,
-                "demographics": search_results.get("demographics", {}) if search_results else {},
-                "psychological": search_results.get("psychology", {}) if search_results else {},
                 "responses": search_results.get("responses", []) if search_results else []
             },
             "processingType": "python-integrated",
@@ -143,22 +141,16 @@ class StreamlinedResponses:
         created_at: datetime = None,
         updated_at: datetime = None
     ) -> Dict[str, Any]:
-        """Build session response - simple dict with frontend compatibility"""
+        """Build session response - consistent snake_case format"""
         response = {
             "id": session_id,
-            "sessionId": session_id,  # Frontend compatibility (camelCase)
             "title": title,
             "user_id": user_id,
-            "userId": user_id,  # Frontend compatibility
             "survey_ids": survey_ids or [],
-            "surveyIds": survey_ids or [],  # Frontend compatibility
             "category": category,
             "personality_id": personality_id,
-            "personalityId": personality_id,  # Frontend compatibility
             "created_at": (created_at or datetime.utcnow()).isoformat(),
-            "createdAt": (created_at or datetime.utcnow()).isoformat(),  # Frontend compatibility
-            "updated_at": (updated_at or datetime.utcnow()).isoformat(),
-            "updatedAt": (updated_at or datetime.utcnow()).isoformat()  # Frontend compatibility
+            "updated_at": (updated_at or datetime.utcnow()).isoformat()
         }
         return response
     

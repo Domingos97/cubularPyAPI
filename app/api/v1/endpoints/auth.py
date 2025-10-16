@@ -1,24 +1,26 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Response
 from fastapi.responses import JSONResponse
-from sqlalchemy.ext.asyncio import AsyncSession
-from typing import Any
 import uuid
 
-from app.core.database import get_db
-from app.core.dependencies import get_current_user, get_current_admin_user
+from app.services.lightweight_db_service import get_lightweight_db, LightweightDBService
+from app.services.lightweight_auth_service import auth_service
+from app.core.lightweight_dependencies import get_current_regular_user, get_current_admin_user, SimpleUser
+from app.core.config import settings
 from app.models.schemas import (
     UserCreate, 
     UserResponse, 
-    Token, 
+    LoginResponse,
     LoginRequest,
     RefreshTokenRequest,
     ResendConfirmationRequest,
     SuccessResponse,
     ErrorResponse
 )
-from app.models.models import User
-from app.services.auth_service import auth_service
 from app.utils.logging import get_logger
+from app.utils.error_handlers import (
+    validation_error
+)
+from app.utils.validation import ValidationHelpers
 
 logger = get_logger(__name__)
 router = APIRouter()
@@ -43,7 +45,7 @@ async def options_handler():
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 async def register(
     user_data: UserCreate,
-    db: AsyncSession = Depends(get_db)
+    db: LightweightDBService = Depends(get_lightweight_db)
 ):
     """
     Register a new user
@@ -56,19 +58,16 @@ async def register(
     try:
         user = await auth_service.create_user(db, user_data)
         
-        logger.info(f"New user registered: {user.email}")
+        logger.info(f"New user registered: {user['email']}")
         
         return UserResponse(
-            id=user.id,
-            email=user.email,
-            username=user.username,
-            language=user.language,
-            email_confirmed=user.email_confirmed,
-            welcome_popup_dismissed=user.welcome_popup_dismissed,
-            last_login=user.last_login,
-            role=user.role.role,
-            created_at=user.created_at,
-            updated_at=user.updated_at
+            id=str(user["id"]),
+            email=user["email"],
+            username=user["username"],
+            language_preference=user.get("language"),
+            role=user.get("role_name"),
+            created_at=user.get("created_at").isoformat() if user.get("created_at") else None,
+            updated_at=user.get("updated_at").isoformat() if user.get("updated_at") else None
         )
         
     except ValueError as e:
@@ -85,20 +84,34 @@ async def register(
         )
 
 
-@router.post("/login")
+@router.post("/login",
+           response_model=LoginResponse,
+           responses={
+               400: {"model": ErrorResponse, "description": "Invalid input"},
+               401: {"model": ErrorResponse, "description": "Invalid credentials"},
+               422: {"model": ErrorResponse, "description": "Validation error"},
+               500: {"model": ErrorResponse, "description": "Internal server error"}
+           })
 async def login(
     login_data: LoginRequest,
-    db: AsyncSession = Depends(get_db)
+    db: LightweightDBService = Depends(get_lightweight_db)
 ):
     """
     Login user and return access tokens
     
-    - **email**: User's email address
+    - **email**: User's email address  
     - **password**: User's password
     
     Returns access token and refresh token in camelCase format for frontend compatibility
     """
     try:
+        # Validate email format
+        validated_email = ValidationHelpers.validate_email(login_data.email)
+        
+        # Validate password length
+        if not login_data.password or len(login_data.password.strip()) < 1:
+            raise validation_error("Password is required")
+        
         # Authenticate user
         user = await auth_service.authenticate_user(
             db, 
@@ -117,13 +130,26 @@ async def login(
         # Create tokens
         tokens = await auth_service.create_tokens(db, user)
         
-        logger.info(f"User logged in: {user.email}")
+        logger.info(f"User logged in: {user['email']}")
         
-        # Return in the exact format the frontend expects (camelCase)
-        return JSONResponse(
-            status_code=200,
-            content=tokens  # tokens already in camelCase format from service
-        )
+        # Very explicit construction
+        access_token = tokens.get("accessToken")
+        refresh_token = tokens.get("refreshToken") 
+        token_type = tokens.get("tokenType")
+        
+        return {
+            "accessToken": access_token,
+            "refreshToken": refresh_token,
+            "tokenType": token_type,
+            "expiresIn": settings.access_token_expire_minutes * 60,  # Convert to seconds
+            "user": {
+                "email": user["email"],
+                "role": user.get("role_name"),
+                "id": str(user["id"]),  # Ensure it's a string, not UUID
+                "username": user.get("username"),
+                "language": user.get("language", "en")
+            }
+        }
         
     except HTTPException:
         raise
@@ -138,7 +164,7 @@ async def login(
 @router.post("/refresh")
 async def refresh_token(
     refresh_data: RefreshTokenRequest,
-    db: AsyncSession = Depends(get_db)
+    db: LightweightDBService = Depends(get_lightweight_db)
 ):
     """
     Refresh access token using refresh token
@@ -178,8 +204,8 @@ async def refresh_token(
 @router.post("/logout", response_model=SuccessResponse)
 async def logout(
     refresh_data: RefreshTokenRequest,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+    current_user: SimpleUser = Depends(get_current_regular_user),
+    db: LightweightDBService = Depends(get_lightweight_db)
 ):
     """
     Logout user by revoking refresh token
@@ -208,8 +234,8 @@ async def logout(
 
 @router.post("/logout-all", response_model=SuccessResponse)
 async def logout_all(
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+    current_user: SimpleUser = Depends(get_current_regular_user),
+    db: LightweightDBService = Depends(get_lightweight_db)
 ):
     """
     Logout from all devices by revoking all refresh tokens
@@ -232,8 +258,8 @@ async def logout_all(
 
 
 @router.get("/me", response_model=UserResponse)
-async def get_current_user_info(
-    current_user: User = Depends(get_current_user)
+async def get_current_regular_user_info(
+    current_user: SimpleUser = Depends(get_current_regular_user)
 ):
     """
     Get current user information
@@ -242,53 +268,71 @@ async def get_current_user_info(
         id=current_user.id,
         email=current_user.email,
         username=current_user.username,
-        language=current_user.language,
-        email_confirmed=current_user.email_confirmed,
-        welcome_popup_dismissed=current_user.welcome_popup_dismissed,
-        last_login=current_user.last_login,
-        role=current_user.role.role,
-        created_at=current_user.created_at,
-        updated_at=current_user.updated_at
+        language_preference=current_user.language,
+        role=current_user.role,
+        created_at=current_user.created_at.isoformat() if current_user.created_at else None,
+        updated_at=current_user.updated_at.isoformat() if current_user.updated_at else None,
+        preferred_personality=current_user.preferred_personality
     )
 
 
 @router.get("/confirm-email")
 async def confirm_email(
     token: str,
-    db: AsyncSession = Depends(get_db)
+    db: LightweightDBService = Depends(get_lightweight_db)
 ):
     """
-    Confirm user email with token
+    Confirm user email with token and redirect to frontend
     
     - **token**: Email confirmation token
     """
     try:
+        from fastapi.responses import RedirectResponse
+        from app.core.config import settings
+        
         user = await auth_service.confirm_email(db, token)
         
         if not user:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid or expired confirmation token"
+            # Redirect to frontend with error
+            frontend_url = settings.allowed_origins[0] if settings.allowed_origins else "http://localhost:8080"
+            return RedirectResponse(
+                url=f"{frontend_url}/auth?error=invalid_token&message=Invalid or expired confirmation token",
+                status_code=302
             )
         
-        logger.info(f"Email confirmed for user: {user.email}")
+        logger.info(f"Email confirmed for user: {user['email']}")
         
-        return SuccessResponse(message="Email confirmed successfully")
+        # Create tokens for auto-login
+        tokens = await auth_service.create_tokens(db, user)
+        
+        # Redirect to frontend with success and auto-login
+        frontend_url = settings.allowed_origins[0] if settings.allowed_origins else "http://localhost:8080"
+        return RedirectResponse(
+            url=f"{frontend_url}/?confirmed=true&access_token={tokens['accessToken']}&refresh_token={tokens['refreshToken']}&message=Email confirmed successfully! You are now logged in.",
+            status_code=302
+        )
         
     except HTTPException:
-        raise
+        # Redirect to frontend with error
+        frontend_url = settings.allowed_origins[0] if settings.allowed_origins else "http://localhost:8080"
+        return RedirectResponse(
+            url=f"{frontend_url}/auth?error=confirmation_failed&message=Email confirmation failed",
+            status_code=302
+        )
     except Exception as e:
         logger.error(f"Email confirmation error: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Email confirmation failed"
+        # Redirect to frontend with error
+        frontend_url = settings.allowed_origins[0] if settings.allowed_origins else "http://localhost:8080"
+        return RedirectResponse(
+            url=f"{frontend_url}/auth?error=confirmation_failed&message=Email confirmation failed",
+            status_code=302
         )
 
 
 @router.post("/resend-confirmation", response_model=SuccessResponse)
 async def resend_confirmation_email(
     request_data: ResendConfirmationRequest,
-    db: AsyncSession = Depends(get_db)
+    db: LightweightDBService = Depends(get_lightweight_db)
 ):
     """
     Resend confirmation email
@@ -327,8 +371,8 @@ async def resend_confirmation_email(
 @router.get("/is-admin/{user_id}")
 async def check_admin_status(
     user_id: uuid.UUID,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+    current_user: SimpleUser = Depends(get_current_regular_user),
+    db: LightweightDBService = Depends(get_lightweight_db)
 ):
     """
     Check if specified user is admin (requires authentication)
@@ -337,7 +381,7 @@ async def check_admin_status(
     """
     # For security, only allow admins to check other users' admin status
     # or users to check their own status
-    if current_user.id != user_id and current_user.role.role != "admin":
+    if current_user.id != user_id and current_user.role != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Not authorized to check this user's admin status"
@@ -346,26 +390,30 @@ async def check_admin_status(
     # Get the target user
     if current_user.id == user_id:
         target_user = current_user
+        is_admin = target_user.role == "admin"
+        role = target_user.role
     else:
-        target_user = await auth_service.get_user_by_id(db, user_id)
-        if not target_user:
+        target_user_data = await auth_service.get_user_by_id(db, user_id)
+        if not target_user_data:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="User not found"
             )
-    
+        is_admin = target_user_data.get("role_name") == "admin"
+        role = target_user_data.get("role_name", "user")
+
     return {
-        "is_admin": target_user.role.role == "admin",
-        "role": target_user.role.role,
-        "user_id": str(target_user.id)
+        "is_admin": is_admin,
+        "role": role,
+        "user_id": str(user_id)
     }
 
 
 @router.post("/upgrade-to-admin", response_model=SuccessResponse)
 async def upgrade_to_admin(
     email: str,
-    admin_user: User = Depends(get_current_admin_user),
-    db: AsyncSession = Depends(get_db)
+    admin_user: SimpleUser = Depends(get_current_admin_user),
+    db: LightweightDBService = Depends(get_lightweight_db)
 ):
     """
     Upgrade a user to admin role (admin only)
@@ -418,8 +466,8 @@ async def upgrade_to_admin(
 async def change_password(
     current_password: str,
     new_password: str,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+    current_user: SimpleUser = Depends(get_current_regular_user),
+    db: LightweightDBService = Depends(get_lightweight_db)
 ):
     """
     Change user password

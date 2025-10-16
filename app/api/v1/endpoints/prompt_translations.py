@@ -5,7 +5,7 @@ from sqlalchemy.orm import selectinload
 from sqlalchemy import select, and_, func
 import uuid
 
-from app.core.dependencies import get_current_user, get_current_admin_user, get_db
+from app.core.dependencies import get_current_regular_user, get_current_admin_user, get_db
 from app.models.models import User, PromptTranslation, AIPersonality, SupportedLanguage
 from app.models.schemas import (
     PromptTranslationCreate, 
@@ -13,7 +13,6 @@ from app.models.schemas import (
     PromptTranslationResponse,
     SuccessResponse
 )
-from app.services.language_service import LanguageService
 
 router = APIRouter()
 
@@ -23,7 +22,7 @@ async def get_prompt_translations_compat(
     personality_id: Optional[str] = Query(None, description="Filter by personality ID"),
     language_code: Optional[str] = Query(None, description="Filter by language code"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_regular_user)
 ):
     """
     Get prompt translations (backward compatibility endpoint)
@@ -61,7 +60,7 @@ async def get_prompt_translations_compat(
 async def create_prompt_translation_compat(
     translation_data: PromptTranslationCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_admin_user)
+    current_user: User = Depends(get_current_regular_user)
 ):
     """
     Create a new prompt translation (backward compatibility)
@@ -90,7 +89,7 @@ async def update_prompt_translation_compat(
     translation_id: uuid.UUID,
     update_data: PromptTranslationUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_admin_user)
+    current_user: User = Depends(get_current_regular_user)
 ):
     """
     Update prompt translation (backward compatibility)
@@ -128,7 +127,7 @@ async def update_prompt_translation_compat(
 async def delete_prompt_translation_compat(
     translation_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_admin_user)
+    current_user: User = Depends(get_current_regular_user)
 ):
     """
     Delete prompt translation (backward compatibility)
@@ -439,7 +438,7 @@ async def delete_personality_translation(
 async def get_personality_prompts_by_language(
     personality_id: str,
     language_code: str,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_regular_user),
     db: AsyncSession = Depends(get_db)
 ):
     """

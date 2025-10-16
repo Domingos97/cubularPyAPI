@@ -1,240 +1,161 @@
-from typing import List, Optional
+"""
+Plan Service - Lightweight Database Implementation
+===============================================
+Direct database operations using LightweightDBService.
+No SQLAlchemy overhead for better performance.
+"""
+
+from typing import Optional, List, Dict, Any
 from uuid import UUID
 
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete, update
-from sqlalchemy.orm import selectinload
+from app.services.lightweight_db_service import LightweightDBService
+from app.utils.logging import get_logger
 
-from app.models.models import Plan, UserPlan, User
-from app.models.schemas import PlanCreate, PlanUpdate, UserPlanCreate
+logger = get_logger(__name__)
 
 
 class PlanService:
-    """Service for managing plans and user plan assignments."""
+    """Plan management service using LightweightDBService"""
     
     @staticmethod
-    async def create_plan(db: AsyncSession, plan_data: PlanCreate) -> Plan:
-        """Create a new plan."""
-        plan = Plan(**plan_data.dict())
-        db.add(plan)
-        await db.commit()
-        await db.refresh(plan)
-        return plan
-    
-    @staticmethod
-    async def get_plan(db: AsyncSession, plan_id: UUID) -> Optional[Plan]:
-        """Get a plan by ID."""
-        stmt = select(Plan).where(Plan.id == plan_id)
-        result = await db.execute(stmt)
-        return result.scalars().first()
+    async def create_plan(db: LightweightDBService, plan_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Create a new plan"""
+        # Convert PlanCreate schema to dict if needed
+        if hasattr(plan_data, 'dict'):
+            plan_data = plan_data.dict()
+        return await db.create_plan(plan_data)
     
     @staticmethod
     async def get_plans(
-        db: AsyncSession, 
-        skip: int = 0, 
+        db: LightweightDBService,
+        skip: int = 0,
         limit: int = 100,
         active_only: bool = True
-    ) -> List[Plan]:
-        """Get all plans with pagination."""
-        stmt = select(Plan)
-        
+    ) -> List[Dict[str, Any]]:
+        """Get all plans with pagination"""
         if active_only:
-            stmt = stmt.where(Plan.is_active == True)
-        
-        stmt = stmt.offset(skip).limit(limit)
-        result = await db.execute(stmt)
-        return result.scalars().all()
+            return await db.get_active_plans()
+        else:
+            return await db.get_all_plans(skip=skip, limit=limit)
+    
+    @staticmethod
+    async def get_plan(db: LightweightDBService, plan_id: UUID) -> Optional[Dict[str, Any]]:
+        """Get plan by ID"""
+        return await db.get_plan_by_id(str(plan_id))
     
     @staticmethod
     async def update_plan(
-        db: AsyncSession, 
+        db: LightweightDBService, 
         plan_id: UUID, 
-        plan_update: PlanUpdate
-    ) -> Optional[Plan]:
-        """Update a plan."""
-        stmt = select(Plan).where(Plan.id == plan_id)
-        result = await db.execute(stmt)
-        plan = result.scalars().first()
-        
-        if not plan:
-            return None
-        
-        update_data = plan_update.dict(exclude_unset=True)
-        for field, value in update_data.items():
-            setattr(plan, field, value)
-        
-        await db.commit()
-        await db.refresh(plan)
-        return plan
+        plan_update: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """Update an existing plan"""
+        # Convert PlanUpdate schema to dict if needed
+        if hasattr(plan_update, 'dict'):
+            plan_update = plan_update.dict(exclude_unset=True)
+        return await db.update_plan(str(plan_id), plan_update)
     
     @staticmethod
-    async def delete_plan(db: AsyncSession, plan_id: UUID) -> bool:
-        """Delete a plan (soft delete by setting is_active to False)."""
-        stmt = update(Plan).where(Plan.id == plan_id).values(is_active=False)
-        result = await db.execute(stmt)
-        await db.commit()
-        return result.rowcount > 0
+    async def delete_plan(db: LightweightDBService, plan_id: UUID) -> bool:
+        """Delete a plan (soft delete by setting is_active to False)"""
+        plan_data = {"is_active": False}
+        result = await db.update_plan(str(plan_id), plan_data)
+        return result is not None
     
     @staticmethod
     async def assign_plan_to_user(
-        db: AsyncSession, 
+        db: LightweightDBService, 
         user_id: UUID, 
         plan_id: UUID,
         admin_user_id: Optional[UUID] = None
-    ) -> UserPlan:
-        """Assign a plan to a user."""
-        # Check if user already has an active plan
-        stmt = select(UserPlan).where(
-            UserPlan.user_id == user_id,
-            UserPlan.is_active == True
-        )
-        result = await db.execute(stmt)
-        existing_plan = result.scalars().first()
-        
-        if existing_plan:
-            # Deactivate existing plan
-            existing_plan.is_active = False
-        
-        # Create new user plan
-        user_plan = UserPlan(
-            user_id=user_id,
-            plan_id=plan_id,
-            is_active=True
-        )
-        db.add(user_plan)
-        await db.commit()
-        await db.refresh(user_plan)
-        return user_plan
+    ) -> Dict[str, Any]:
+        """Assign a plan to a user"""
+        return await db.assign_plan_to_user(str(user_id), str(plan_id))
 
     @staticmethod
     async def revoke_plan_from_user(
-        db: AsyncSession,
+        db: LightweightDBService,
         user_id: UUID,
         user_plan_id: Optional[UUID] = None,
         admin_user_id: Optional[UUID] = None
     ) -> bool:
-        """Revoke a plan from a user."""
-        if user_plan_id:
-            # Revoke specific plan
-            stmt = update(UserPlan).where(
-                UserPlan.id == user_plan_id,
-                UserPlan.user_id == user_id
-            ).values(is_active=False)
-        else:
-            # Revoke current active plan
-            stmt = update(UserPlan).where(
-                UserPlan.user_id == user_id,
-                UserPlan.is_active == True
-            ).values(is_active=False)
-        
-        result = await db.execute(stmt)
-        await db.commit()
-        return result.rowcount > 0
+        """Revoke a plan from a user (sets status to cancelled)"""
+        user_plan_id_str = str(user_plan_id) if user_plan_id else None
+        return await db.revoke_plan_from_user(str(user_id), user_plan_id_str)
     
     @staticmethod
-    async def get_user_plan(db: AsyncSession, user_id: UUID) -> Optional[UserPlan]:
-        """Get the active plan for a user."""
-        stmt = select(UserPlan).options(
-            selectinload(UserPlan.plan)
-        ).where(
-            UserPlan.user_id == user_id,
-            UserPlan.is_active == True
-        )
-        result = await db.execute(stmt)
-        return result.scalars().first()
+    async def remove_user_plan_access(
+        db: LightweightDBService,
+        user_id: UUID,
+        admin_user_id: Optional[UUID] = None
+    ) -> bool:
+        """Completely remove plan access for a user (deletes the record)"""
+        return await db.remove_user_plan_access(str(user_id))
     
     @staticmethod
-    async def cancel_user_plan(db: AsyncSession, user_id: UUID) -> bool:
-        """Cancel a user's active plan."""
-        stmt = update(UserPlan).where(
-            UserPlan.user_id == user_id,
-            UserPlan.is_active == True
-        ).values(is_active=False)
-        result = await db.execute(stmt)
-        await db.commit()
-        return result.rowcount > 0
+    async def get_user_plan(db: LightweightDBService, user_id: UUID) -> Optional[Dict[str, Any]]:
+        """Get the active plan for a user"""
+        return await db.get_user_plan(str(user_id))
+    
+    @staticmethod
+    async def cancel_user_plan(db: LightweightDBService, user_id: UUID) -> bool:
+        """Cancel a user's active plan"""
+        return await db.cancel_user_plan(str(user_id))
     
     @staticmethod
     async def get_plan_users(
-        db: AsyncSession, 
+        db: LightweightDBService, 
         plan_id: UUID,
         active_only: bool = True
-    ) -> List[UserPlan]:
-        """Get all users with a specific plan."""
-        stmt = select(UserPlan).options(
-            selectinload(UserPlan.user)
-        ).where(UserPlan.plan_id == plan_id)
-        
-        if active_only:
-            stmt = stmt.where(UserPlan.is_active == True)
-        
-        result = await db.execute(stmt)
-        return result.scalars().all()
-    
+    ) -> List[Dict[str, Any]]:
+        """Get all users with a specific plan"""
+        return await db.get_plan_users(str(plan_id), active_only)
+
     @staticmethod
     async def check_plan_feature(
-        db: AsyncSession, 
+        db: LightweightDBService, 
         user_id: UUID, 
         feature_name: str
     ) -> bool:
-        """Check if user's plan includes a specific feature."""
-        user_plan = await PlanService.get_user_plan(db, user_id)
-        
-        if not user_plan or not user_plan.plan:
-            return False
-        
-        # Parse features JSON string
-        import json
-        try:
-            features = json.loads(user_plan.plan.features or "{}")
-            return features.get(feature_name, False)
-        except (json.JSONDecodeError, AttributeError):
-            return False
+        """Check if user's plan includes a specific feature"""
+        return await db.check_plan_feature(str(user_id), feature_name)
     
     @staticmethod
-    async def get_plan_usage_stats(db: AsyncSession, plan_id: UUID) -> dict:
-        """Get usage statistics for a plan."""
-        # Count total users
-        stmt = select(UserPlan).where(UserPlan.plan_id == plan_id)
-        result = await db.execute(stmt)
-        total_users = len(result.scalars().all())
-        
-        # Count active users
-        stmt = select(UserPlan).where(
-            UserPlan.plan_id == plan_id,
-            UserPlan.is_active == True
-        )
-        result = await db.execute(stmt)
-        active_users = len(result.scalars().all())
-        
-        return {
-            "plan_id": plan_id,
-            "total_users": total_users,
-            "active_users": active_users,
-            "inactive_users": total_users - active_users
-        }
+    async def get_plan_usage_stats(db: LightweightDBService, plan_id: UUID) -> Dict[str, Any]:
+        """Get usage statistics for a plan"""
+        return await db.get_plan_usage_stats(str(plan_id))
     
     @staticmethod
-    async def get_available_plans(db: AsyncSession) -> List[Plan]:
-        """Get all available plans for users to choose from"""
-        stmt = select(Plan).where(Plan.is_active == True)
-        result = await db.execute(stmt)
-        return result.scalars().all()
+    async def get_available_plans(db: LightweightDBService) -> List[Dict[str, Any]]:
+        """Get all available (active) plans for public consumption"""
+        return await db.get_active_plans()
     
     @staticmethod
-    async def get_user_plan_usage(db: AsyncSession, user_id: UUID) -> Optional[dict]:
+    async def get_user_plan_usage(db: LightweightDBService, user_id: UUID) -> Optional[Dict[str, Any]]:
         """Get usage statistics for user's current plan"""
-        user_plan = await PlanService.get_user_plan(db, user_id)
+        user_plan = await db.get_user_plan(str(user_id))
         if not user_plan:
             return None
         
-        # Calculate usage based on plan features
-        # This is a simplified implementation
+        # Get plan details
+        plan = await db.get_plan_by_id(user_plan['plan_id'])
+        if not plan:
+            return None
+        
+        # Parse features if available
+        features = {}
+        if plan.get('features'):
+            import json
+            try:
+                features = json.loads(plan['features'])
+            except (json.JSONDecodeError, TypeError):
+                features = {}
+        
         usage = {
-            "plan_name": user_plan.plan.name,
-            "plan_id": str(user_plan.plan.id),
-            "assigned_at": user_plan.assigned_at.isoformat() if user_plan.assigned_at else None,
-            "features": user_plan.plan.features if hasattr(user_plan.plan, 'features') else {},
+            "plan_name": plan['name'],
+            "plan_id": user_plan['plan_id'],
+            "start_date": user_plan.get('start_date'),
+            "features": features,
             "usage_stats": {
                 "surveys_created": 0,  # TODO: Calculate from user's surveys
                 "chat_sessions": 0,    # TODO: Calculate from user's chat sessions
@@ -246,27 +167,25 @@ class PlanService:
     
     @staticmethod
     async def upgrade_user_plan(
-        db: AsyncSession, 
-        user_id: UUID, 
+        db: LightweightDBService,
+        user_id: UUID,
         new_plan_id: UUID
     ) -> bool:
         """Upgrade user to a new plan"""
         try:
             # Check if the new plan exists
-            new_plan = await PlanService.get_plan(db, new_plan_id)
+            new_plan = await db.get_plan_by_id(str(new_plan_id))
             if not new_plan:
                 return False
             
-            # Cancel current plan if exists
-            await PlanService.cancel_user_plan(db, user_id)
+            # This will handle deactivating the old plan and assigning the new one
+            result = await db.assign_plan_to_user(str(user_id), str(new_plan_id))
             
-            # Assign new plan
-            user_plan = await PlanService.assign_plan_to_user(db, user_id, new_plan_id)
+            logger.info(f"User {user_id} upgraded to plan {new_plan_id}")
+            return result is not None
             
-            return user_plan is not None
-            
-        except Exception:
-            await db.rollback()
+        except Exception as e:
+            logger.error(f"Failed to upgrade user {user_id} to plan {new_plan_id}: {e}")
             return False
 
 

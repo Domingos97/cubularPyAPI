@@ -1,14 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query
-from sqlalchemy.ext.asyncio import AsyncSession
-from typing import List, Optional
+from typing import Optional
 from datetime import datetime, timedelta
 import uuid
 
-from app.core.database import get_db
-from app.core.dependencies import get_current_user, get_current_admin_user
-from app.models.schemas import LogCreate, LogResponse, SuccessResponse
-from app.models.models import User
-from app.services.logging_service import logging_service
+from app.services.lightweight_db_service import get_lightweight_db, LightweightDBService
+from app.core.lightweight_dependencies import  get_current_regular_user, get_current_admin_user, SimpleUser
+from app.models.schemas import LogCreate, LogResponse
 from app.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -25,8 +22,8 @@ async def get_logs(
     end_date: Optional[datetime] = Query(None, description="End date for filtering"),
     offset: int = Query(0, ge=0, description="Number of logs to skip"),
     limit: int = Query(50, ge=1, le=1000, description="Number of logs to return"),
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_admin_user)
+    db: LightweightDBService = Depends(get_lightweight_db),
+    current_user: SimpleUser = Depends(get_current_regular_user)
 ):
     """
     Get logs with filtering and pagination (Admin only)
@@ -54,11 +51,11 @@ async def get_logs(
             "limit": limit
         }
         
-        logs = await logging_service.get_logs(db, filters)
+        logs = await db.get_logs(filters)
         
         # Get total count for pagination
         count_filters = {k: v for k, v in filters.items() if k not in ['skip', 'limit']}
-        total_count = await logging_service.get_logs_count(db, count_filters)
+        total_count = await db.get_logs_count(count_filters)
         
         logger.info(f"Retrieved {len(logs)} logs for admin {current_user.id} with filters: {filters}")
         
@@ -89,8 +86,8 @@ async def get_logs_count(
     method: Optional[str] = Query(None, description="Filter by HTTP method"),
     start_date: Optional[datetime] = Query(None, description="Start date for filtering"),
     end_date: Optional[datetime] = Query(None, description="End date for filtering"),
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_admin_user)
+    db: LightweightDBService = Depends(get_lightweight_db),
+    current_user: SimpleUser = Depends(get_current_regular_user)
 ):
     """
     Get count of logs matching filters (Admin only)
@@ -107,7 +104,7 @@ async def get_logs_count(
             "end_date": end_date
         }
         
-        count = await logging_service.get_logs_count(db, filters)
+        count = await db.get_logs_count(filters)
         
         logger.info(f"Retrieved logs count ({count}) for admin {current_user.id}")
         return {
@@ -129,8 +126,8 @@ async def get_log_statistics(
     start_date: Optional[datetime] = Query(None, description="Start date for statistics"),
     end_date: Optional[datetime] = Query(None, description="End date for statistics"),
     user_id: Optional[uuid.UUID] = Query(None, description="Filter by user ID"),
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_admin_user)
+    db: LightweightDBService = Depends(get_lightweight_db),
+    current_user: SimpleUser = Depends(get_current_regular_user)
 ):
     """
     Get log statistics for dashboard (Admin only)
@@ -152,8 +149,8 @@ async def get_log_statistics(
         if not start_date:
             start_date = end_date - timedelta(days=7)
         
-        stats = await logging_service.get_log_statistics(
-            db, start_date, end_date, user_id
+        stats = await db.get_log_statistics(
+            start_date, end_date, user_id
         )
         
         logger.info(f"Retrieved log statistics for admin {current_user.id} from {start_date} to {end_date}")
@@ -169,15 +166,14 @@ async def get_log_statistics(
 
 @router.get("/levels")
 async def get_log_levels(
-    current_user: User = Depends(get_current_admin_user)
-):
+    db: LightweightDBService = Depends(get_lightweight_db)):
     """
     Get available log levels (Admin only)
     
     Returns list of available log levels for filtering
     """
     try:
-        levels = logging_service.get_log_levels()
+        levels = db.get_log_levels()
         
         return {
             "levels": levels,
@@ -197,8 +193,8 @@ async def get_log_levels(
 async def get_recent_logs(
     limit: int = Query(20, ge=1, le=100, description="Number of recent logs to return"),
     level: Optional[str] = Query(None, description="Filter by log level"),
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_admin_user)
+    db: LightweightDBService = Depends(get_lightweight_db),
+    current_user: SimpleUser = Depends(get_current_regular_user)
 ):
     """
     Get most recent logs (Admin only)
@@ -209,7 +205,7 @@ async def get_recent_logs(
     Returns most recent log entries
     """
     try:
-        logs = await logging_service.get_recent_logs(db, limit, level)
+        logs = await db.get_recent_logs(limit, level)
         
         logger.info(f"Retrieved {len(logs)} recent logs for admin {current_user.id}")
         return logs
@@ -227,8 +223,8 @@ async def get_error_logs(
     hours: int = Query(24, ge=1, le=168, description="Number of hours to look back"),
     skip: int = Query(0, ge=0, description="Number of errors to skip"),
     limit: int = Query(50, ge=1, le=200, description="Number of errors to return"),
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_admin_user)
+    db: LightweightDBService = Depends(get_lightweight_db),
+    current_user: SimpleUser = Depends(get_current_regular_user)
 ):
     """
     Get error logs from specified time period (Admin only)
@@ -243,8 +239,8 @@ async def get_error_logs(
         end_date = datetime.utcnow()
         start_date = end_date - timedelta(hours=hours)
         
-        errors = await logging_service.get_error_logs(
-            db, start_date, end_date, skip, limit
+        errors = await db.get_error_logs(
+            start_date, end_date, skip, limit
         )
         
         logger.info(f"Retrieved {len(errors)} error logs for admin {current_user.id} from last {hours} hours")
@@ -273,8 +269,8 @@ async def get_error_logs(
 @router.post("/", response_model=LogResponse, status_code=status.HTTP_201_CREATED)
 async def create_log_entry(
     log_data: LogCreate,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_admin_user)
+    db: LightweightDBService = Depends(get_lightweight_db),
+    current_user: SimpleUser = Depends(get_current_regular_user)
 ):
     """
     Create a manual log entry (Admin only)
@@ -293,7 +289,7 @@ async def create_log_entry(
     Returns the created log entry
     """
     try:
-        log_entry = await logging_service.create_log_entry(db, log_data)
+        log_entry = await db.create_log_entry(log_data)
         
         logger.info(f"Created manual log entry {log_entry.id} by admin {current_user.id}")
         return log_entry
@@ -317,8 +313,8 @@ async def cleanup_old_logs(
     days: int = Query(30, ge=1, le=365, description="Delete logs older than this many days"),
     level: Optional[str] = Query(None, description="Only delete logs of this level"),
     dry_run: bool = Query(True, description="If true, only count what would be deleted"),
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_admin_user)
+    db: LightweightDBService = Depends(get_lightweight_db),
+    current_user: SimpleUser = Depends(get_current_regular_user)
 ):
     """
     Clean up old log entries (Admin only)
@@ -333,7 +329,7 @@ async def cleanup_old_logs(
         cutoff_date = datetime.utcnow() - timedelta(days=days)
         
         if dry_run:
-            count = await logging_service.count_logs_for_cleanup(db, cutoff_date, level)
+            count = await db.count_logs_for_cleanup(cutoff_date, level)
             logger.info(f"Dry run: Would delete {count} logs older than {cutoff_date} by admin {current_user.id}")
             return {
                 "dry_run": True,
@@ -343,7 +339,7 @@ async def cleanup_old_logs(
                 "message": f"Would delete {count} log entries older than {days} days"
             }
         else:
-            deleted_count = await logging_service.cleanup_old_logs(db, cutoff_date, level)
+            deleted_count = await db.cleanup_old_logs(cutoff_date, level)
             logger.warning(f"Deleted {deleted_count} old logs by admin {current_user.id}")
             return {
                 "dry_run": False,
