@@ -38,6 +38,7 @@ openpyxl==3.1.2
 #python-magic==0.4.27
 #python-magic-bin==0.4.14  # Windows binary for python-magic
 #xlrd==2.0.1
+sqlalchemy
 
 # Email
 #aiosmtplib==3.0.1
