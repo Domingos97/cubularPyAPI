@@ -36,7 +36,7 @@ cachetools==5.3.2  # LRU cache implementation
 pandas==2.2.3
 openpyxl==3.1.2
 python-magic==0.4.27
-python-magic-bin==0.4.15  # Windows binary for python-magic
+python-magic-bin==0.4.27  # Windows binary for python-magic
 #xlrd==2.0.1
 sqlalchemy
 
