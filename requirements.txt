@@ -26,7 +26,7 @@ openai==1.3.6
 anthropic==0.7.8
 numpy>=1.24.0
 scikit-learn>=1.3.0
-#sentence-transformers>=2.2.0
+sentence_transformers>=2.2.0
 
 # Vector Search and Caching
 pickle-mixin==1.0.2  # Enhanced pickle support
