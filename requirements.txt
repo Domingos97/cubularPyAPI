@@ -37,33 +37,17 @@ pandas==2.2.3
 openpyxl==3.1.2
 python-magic==0.4.27
 #python-magic-bin==0.4.27  # Windows binary for python-magic
-#xlrd==2.0.1
 sqlalchemy
 
-# Email
-#aiosmtplib==3.0.1
 
 # Environment and Configuration
 python-dotenv==1.0.0
 pydantic[email]==2.5.0
-
-# Validation and UUID
-#email-validator==2.1.0
-
 # Logging
 structlog==23.2.0
 
 # System monitoring
-#psutil==5.9.6
+psutil==5.9.6
 
-# Testing (dev)
-#pytest==7.4.3
-#pytest-asyncio==0.21.1
 httpx==0.25.2
 
-# Development tools (dev)
-#black==23.11.0
-#isort==5.12.0
-#flake8==6.1.0
-#mypy==1.7.1
-#pre-commit==3.5.0
