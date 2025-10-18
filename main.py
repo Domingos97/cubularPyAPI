@@ -100,8 +100,8 @@ app = FastAPI(
     description="High-performance Python API for survey data analysis and AI-powered insights",
     openapi_url="/api/openapi.json",
     docs_url=None,  # We'll create custom docs
-    redoc_url=None,
-    lifespan=lifespan
+    redoc_url=None
+    # lifespan=lifespan  # Temporarily commented out for troubleshooting
 )
 
 # Custom OpenAPI schema
