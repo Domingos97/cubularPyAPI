@@ -159,6 +159,7 @@ app.add_middleware(
         "http://127.0.0.1:3000",                      # Alternative localhost
         "http://127.0.0.1:8080",                      # Alternative localhost
         "http://127.0.0.1:8081",                      # Alternative localhost
+        "https://cubularpyapi-production.up.railway.app", # Allow production frontend
     ],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
