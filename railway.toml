@@ -1,5 +1,2 @@
-
-
 [env]
-# Installs libmagic system package for python-magic compatibility
-NIXPACKS_PKGS = "libmagic"
+NIXPACKS_PKGS = "file"
