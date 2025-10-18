@@ -1,2 +1,2 @@
 [env]
-NIXPACKS_PKGS = "file"
+NIXPACKS_PKGS = "libmagic1"
