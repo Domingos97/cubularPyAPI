@@ -1,6 +1,5 @@
-[deploy]
-# Railway does not natively support apt packages in railway.toml, but you can use the NIXPACKS_INSTALL variable to install system packages.
-# This will install libmagic1 before your app starts.
+
 
 [env]
+# Installs libmagic system package for python-magic compatibility
 NIXPACKS_PKGS = "libmagic"
