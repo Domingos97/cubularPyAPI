@@ -3,4 +3,4 @@
 # This will install libmagic1 before your app starts.
 
 [env]
-NIXPACKS_INSTALL = "apt-get update && apt-get install -y libmagic1"
+NIXPACKS_PKGS = "libmagic"
