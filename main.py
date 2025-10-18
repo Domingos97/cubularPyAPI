@@ -35,25 +35,6 @@ def sanitize_for_json(data: Any) -> Any:
         return data
 
 
-def _safe_body_to_string(body) -> str:
-    """Safely convert request body to string for logging"""
-    if body is None:
-        return None
-    if isinstance(body, str):
-        return body
-    if isinstance(body, bytes):
-        try:
-            return body.decode('utf-8')
-        except UnicodeDecodeError:
-            return f"<binary data, {len(body)} bytes>"
-    if isinstance(body, dict):
-        import json
-        try:
-            return json.dumps(body)
-        except (TypeError, ValueError):
-            return str(body)
-    return str(body)
-
 
 # Lifespan event handler with lightweight initialization
 @asynccontextmanager
