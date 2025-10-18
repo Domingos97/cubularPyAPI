@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     """Application settings for local development environment"""
     
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=".env.local",
         case_sensitive=False,
         extra="ignore"  # Ignore extra fields from environment
     )
