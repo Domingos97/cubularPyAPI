@@ -272,12 +272,12 @@ if __name__ == "__main__":
     import uvicorn
     import os
     # Always use the PORT environment variable if set, otherwise default to 8000
-    port = int(os.environ.get("PORT", 8000))
+    port = int(os.environ.get("PORT", 10000))
     print(f"[Startup] Using port: {port}")
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
-        port=port,
+        port=10000,
         reload=getattr(settings, 'debug', False),
         log_level=getattr(settings, 'log_level', 'info').lower()
     )
