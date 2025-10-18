@@ -271,7 +271,9 @@ async def api_info():
 if __name__ == "__main__":
     import uvicorn
     import os
-    port = 55023#int(os.environ.get("PORT", settings.port if hasattr(settings, 'port') else 8000))
+    # Always use the PORT environment variable if set, otherwise default to 8000
+    port = int(os.environ.get("PORT", 8000))
+    print(f"[Startup] Using port: {port}")
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
