@@ -271,7 +271,7 @@ async def api_info():
 if __name__ == "__main__":
     import uvicorn
     import os
-    port = int(os.environ.get("PORT", settings.port if hasattr(settings, 'port') else 8000))
+    port = 22222#int(os.environ.get("PORT", settings.port if hasattr(settings, 'port') else 8000))
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
