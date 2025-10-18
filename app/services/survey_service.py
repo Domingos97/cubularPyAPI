@@ -7,7 +7,7 @@ import os
 import shutil
 from pathlib import Path
 import pandas as pd
-import magic
+#import magic
 import json
 import asyncio
 
@@ -45,28 +45,23 @@ class FileProcessor:
     @staticmethod
     def validate_file(filename: str, content: bytes) -> tuple[bool, str]:
         """Validate file type and content"""
+        import mimetypes
         # Check extension first
         file_ext = Path(filename).suffix.lower()
         if file_ext not in FileProcessor.ALLOWED_EXTENSIONS:
             return False, f"File extension {file_ext} not allowed. Allowed: {', '.join(FileProcessor.ALLOWED_EXTENSIONS)}"
-        
-        # Check MIME type with fallback to extension-based validation
-        try:
-            mime_type = magic.from_buffer(content, mime=True)
-            logger.info(f"Detected MIME type for {filename}: {mime_type}")
-            
-            if mime_type not in FileProcessor.ALLOWED_MIME_TYPES:
-                logger.warning(f"MIME type {mime_type} not in allowed list for {filename}, but proceeding based on extension")
-                    
-        except Exception as e:
-            logger.warning(f"Could not determine MIME type for {filename}: {e}")
-            # Fall back to extension-based validation - this is fine
-            logger.info(f"Using extension-based validation for {filename}")
-        
+
+        # Use mimetypes to guess MIME type from filename
+        mime_type, _ = mimetypes.guess_type(filename)
+        logger.info(f"Guessed MIME type for {filename}: {mime_type}")
+
+        if mime_type and mime_type not in FileProcessor.ALLOWED_MIME_TYPES:
+            logger.warning(f"MIME type {mime_type} not in allowed list for {filename}, but proceeding based on extension")
+
         # Check file size
         if len(content) > settings.max_file_size:
             return False, f"File size {len(content)} bytes exceeds maximum {settings.max_file_size} bytes"
-        
+
         return True, "File is valid"
     
     @staticmethod
