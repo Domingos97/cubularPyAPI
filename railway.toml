@@ -1,7 +1,3 @@
-
-[setup]
-python = "3.11"
-
 [build]
 builder = "NIXPACKS"
 
