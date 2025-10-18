@@ -294,7 +294,8 @@ class ParallelProcessor:
         except Exception as e:
             logger.error(f"Error processing survey data for {survey_id}: {str(e)}")
             return []
-    
+        
+    '''
     async def get_survey_stats_parallel(self, survey_ids: List[str]) -> Dict[str, Any]:
         """
         Get statistics for multiple surveys in parallel using optimized loading
@@ -370,6 +371,8 @@ class ParallelProcessor:
             }
         }
 
+    '''
+    
 
 # Global optimized processor instance
 parallel_processor = ParallelProcessor(max_concurrent=8)
