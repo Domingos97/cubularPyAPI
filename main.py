@@ -152,16 +152,8 @@ async def custom_swagger_ui_html():
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://preview--projectxy-12.lovable.app",  # Lovable preview
-        "http://localhost:5173",                       # Local development
-        "http://localhost:3000",                        # If testing locally
         "http://localhost:8080",                       # If testing locally
-        "http://localhost:8081",                       # Frontend development server
-        "http://127.0.0.1:5173",                      # Alternative localhost
-        "http://127.0.0.1:3000",                      # Alternative localhost
-        "http://127.0.0.1:8080",                      # Alternative localhost
-        "http://127.0.0.1:8081",                      # Alternative localhost
-        "https://cubularpyapi-production.up.railway.app", # Allow production frontend
+        "https://cubularpyfront-production.up.railway.app", # Allow production frontend
     ],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],

@@ -294,7 +294,7 @@ async def confirm_email(
         
         if not user:
             # Redirect to frontend with error
-            frontend_url = settings.allowed_origins[0] if settings.allowed_origins else "http://localhost:8080"
+            frontend_url = settings.allowed_origins[0] if settings.allowed_origins else "https://cubularpyfront-production.up.railway.app"
             return RedirectResponse(
                 url=f"{frontend_url}/auth?error=invalid_token&message=Invalid or expired confirmation token",
                 status_code=302
@@ -306,7 +306,7 @@ async def confirm_email(
         tokens = await auth_service.create_tokens(db, user)
         
         # Redirect to frontend with success and auto-login
-        frontend_url = settings.allowed_origins[0] if settings.allowed_origins else "http://localhost:8080"
+        frontend_url = settings.allowed_origins[0] if settings.allowed_origins else "https://cubularpyfront-production.up.railway.app"
         return RedirectResponse(
             url=f"{frontend_url}/?confirmed=true&access_token={tokens['accessToken']}&refresh_token={tokens['refreshToken']}&message=Email confirmed successfully! You are now logged in.",
             status_code=302
@@ -314,7 +314,7 @@ async def confirm_email(
         
     except HTTPException:
         # Redirect to frontend with error
-        frontend_url = settings.allowed_origins[0] if settings.allowed_origins else "http://localhost:8080"
+        frontend_url = settings.allowed_origins[0] if settings.allowed_origins else "https://cubularpyfront-production.up.railway.app"
         return RedirectResponse(
             url=f"{frontend_url}/auth?error=confirmation_failed&message=Email confirmation failed",
             status_code=302
@@ -322,7 +322,7 @@ async def confirm_email(
     except Exception as e:
         logger.error(f"Email confirmation error: {str(e)}")
         # Redirect to frontend with error
-        frontend_url = settings.allowed_origins[0] if settings.allowed_origins else "http://localhost:8080"
+        frontend_url = settings.allowed_origins[0] if settings.allowed_origins else "https://cubularpyfront-production.up.railway.app"
         return RedirectResponse(
             url=f"{frontend_url}/auth?error=confirmation_failed&message=Email confirmation failed",
             status_code=302

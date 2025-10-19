@@ -91,7 +91,7 @@ class LightweightAuthService:
             )
             
             # Create confirmation link - point to API endpoint which will handle confirmation and redirect
-            api_base_url = "http://localhost:8000"  # API server URL
+            api_base_url = "https://cubularpyfront-production.up.railway.app"  # API server URL
             confirmation_link = f"{api_base_url}/api/auth/confirm-email?token={confirmation_token}"
             
             # Send email
@@ -248,7 +248,7 @@ class LightweightAuthService:
             )
             
             # Create confirmation link - point to API endpoint which will handle confirmation and redirect
-            api_base_url = "http://localhost:8000"  # API server URL
+            api_base_url = "https://cubularpyfront-production.up.railway.app"  # API server URL
             confirmation_link = f"{api_base_url}/api/auth/confirm-email?token={confirmation_token}"
             
             # Send email

@@ -68,7 +68,7 @@ async def main():
     
     print("\n🎉 Setup complete! Next steps:")
     print("1. Start the API: python start_server.py")
-    print("2. Visit http://localhost:8000/docs for API documentation")
+    print("2. Visit https://cubularpyfront-production.up.railway.app/docs for API documentation")
     print("3. Create your first user via the /auth/register endpoint")
 
 
