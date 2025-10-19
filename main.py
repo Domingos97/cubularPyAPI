@@ -102,8 +102,8 @@ app = FastAPI(
     docs_url=None,  # We'll create custom docs
     redoc_url=None,
     # Prevent automatic redirect for trailing slashes to avoid preflight redirect issues
-    redirect_slashes=False
-    # lifespan=lifespan  # Temporarily commented out for troubleshooting
+    redirect_slashes=False,
+    lifespan=lifespan
 )
 
 # Custom OpenAPI schema
