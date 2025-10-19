@@ -100,7 +100,9 @@ app = FastAPI(
     description="High-performance Python API for survey data analysis and AI-powered insights",
     openapi_url="/api/openapi.json",
     docs_url=None,  # We'll create custom docs
-    redoc_url=None
+    redoc_url=None,
+    # Prevent automatic redirect for trailing slashes to avoid preflight redirect issues
+    redirect_slashes=False
     # lifespan=lifespan  # Temporarily commented out for troubleshooting
 )
 
@@ -236,7 +238,7 @@ async def root():
     return "API is running... Visit /docs for documentation"
 
 # Include API routes (single versioned prefix)
-app.include_router(api_router, prefix="/api/v1")
+app.include_router(api_router, prefix="/api/v1", include_in_schema=True)
 
 # Additional utility endpoints
 @app.get("/api/v1/info", tags=["info"])
