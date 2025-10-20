@@ -1552,6 +1552,21 @@ class LightweightDBService:
                 param_count += 1
                 set_clauses.append(f"avatar = ${param_count}")
                 params.append(user_update.avatar)
+
+            # Allow updating the user's role by role name. We'll translate role name to roleid.
+            role_id_to_set = None
+            if hasattr(user_update, 'role') and user_update.role is not None:
+                # Lookup role id
+                try:
+                    role_row = await self.execute_fetchrow("SELECT id FROM roles WHERE role = $1 LIMIT 1", [user_update.role])
+                    if role_row and role_row.get('id'):
+                        role_id_to_set = role_row['id']
+                except Exception as e:
+                    logger.warning(f"Failed to lookup role '{user_update.role}': {e}")
+                if role_id_to_set:
+                    param_count += 1
+                    set_clauses.append(f"roleid = ${param_count}")
+                    params.append(role_id_to_set)
             
             # Allow updating the AI personalities access flag
             if hasattr(user_update, 'has_ai_personalities_access') and user_update.has_ai_personalities_access is not None:

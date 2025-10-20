@@ -472,6 +472,19 @@ async def update_user_by_id(
             detail="Users can only update their own profile"
         )
     try:
+        # Only admins are allowed to change another user's role
+        if getattr(user_update, 'role', None) is not None:
+            if current_user.role != 'admin':
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Only admin users can change roles"
+                )
+            # Optionally validate role string length / format
+            if not isinstance(user_update.role, str) or len(user_update.role) > 64:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Invalid role"
+                )
         # Validate user_id is a proper UUID format
         import uuid
         try:

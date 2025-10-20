@@ -71,6 +71,7 @@ class UserUpdate(BaseSchema):
     email: Optional[EmailStr] = None
     password: Optional[str] = None
     language: Optional[str] = None
+    role: Optional[str] = None
     preferred_personality: Optional[str] = None
     avatar: Optional[str] = None
     welcome_popup_dismissed: Optional[bool] = None
@@ -128,6 +129,7 @@ class AIPersonality(BaseSchema):
     description: str
     detailed_analysis_prompt: str
     suggestions_prompt: str
+    created_by: Optional[str] = None
     model_override: Optional[str] = None
     temperature_override: Optional[float] = None
     is_default: bool

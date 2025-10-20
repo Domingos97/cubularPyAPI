@@ -139,14 +139,12 @@ async def get_my_surveys(
     For non-admin users, only completed surveys are shown (pending surveys are hidden).
     """
     try:
-        # Check if user is admin
-        is_admin = current_user.role in ["admin", "super_admin"]
         
-        logger.info(f"User {current_user.id} ({current_user.email}) requesting surveys, is_admin: {is_admin}")
+        logger.info(f"User {current_user.id} ({current_user.email}) requesting surveys, is_admin: {current_user.role}")
         
         surveys_data = []
         
-        if is_admin:
+        if current_user.role == "admin":
             # Admin users get access to all completed surveys (and pending ones if needed)
             query = """
             SELECT s.id, s.title, s.category, s.description, s.ai_suggestions, 

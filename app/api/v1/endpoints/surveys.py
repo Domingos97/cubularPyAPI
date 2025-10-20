@@ -365,7 +365,7 @@ async def upload_survey_file(
     """
     try:
         # Check if user is admin - only admins can upload files
-        is_admin = current_user.role in ["admin", "super_admin"]
+        if current_user.role != "admin":
         
         if not is_admin:
             raise HTTPException(
@@ -548,10 +548,8 @@ async def check_survey_access(
     Used by frontend chat component to determine available files.
     """
     try:
-        # Check if user is admin - admins have access to all surveys
-        is_admin = current_user.role in ["admin", "super_admin"]
         
-        if is_admin:
+        if current_user.role == "admin":
             # Admin users get access to any survey that exists
             survey_data = await db.execute_fetchrow(
                 "SELECT id, title FROM surveys WHERE id = $1",
@@ -668,10 +666,8 @@ async def get_survey(
     Returns survey basic information including ai_suggestions.
     """
     try:
-        # Check if user is admin - admins have access to all surveys
-        is_admin = current_user.role in ["admin", "super_admin"]
         
-        if is_admin:
+        if current_user.role == "admin":
             # Admin users get access to any survey that exists
             survey_data = await db.execute_fetchrow(
                 """
@@ -747,10 +743,8 @@ async def get_survey_with_files(
     Get a specific survey along with its associated files.
     """
     try:
-        # Check if user is admin - admins have access to all surveys
-        is_admin = current_user.role in ["admin", "super_admin"]
-        
-        if is_admin:
+
+        if current_user.role == "admin":
             # Admin users get access to any survey that exists
             survey_data = await db.execute_fetchrow(
                 """
@@ -848,10 +842,8 @@ async def get_survey_file_rows(
     Returns the file content as JSON with rows and columns.
     """
     try:
-        # Check if user has access to the survey
-        is_admin = current_user.role in ["admin", "super_admin"]
-        
-        if is_admin:
+    
+        if current_user.role == "admin":
             # Admin users get access to any survey file that exists
             file_data = await db.execute_fetchrow(
                 """
@@ -1010,11 +1002,8 @@ async def delete_survey(
     - All chat messages from those sessions
     """
     try:
-        # Check if user has permission to delete this survey
-        # Only admins can delete surveys
-        is_admin = current_user.role in ["admin", "super_admin"]
         
-        if not is_admin:
+        if current_user.role != "admin":
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Only administrators can delete surveys"
@@ -1162,9 +1151,8 @@ async def delete_survey_file(
     try:
         # Check if user has permission to delete files
         # Only admins can delete files
-        is_admin = current_user.role in ["admin", "super_admin"]
         
-        if not is_admin:
+        if current_user.role != "admin":
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Only administrators can delete files"
@@ -1383,7 +1371,7 @@ async def survey_semantic_chat(
                     auto_files = []
                     for sid in survey_ids:
                         # For each survey, get processed files accessible to the user
-                        if current_user.role in ["admin", "super_admin"]:
+                        if current_user.role == "admin":
                             files = await db.execute_query(
                                 "SELECT id FROM survey_files WHERE survey_id = $1",
                                 [sid]
