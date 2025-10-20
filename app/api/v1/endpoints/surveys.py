@@ -366,8 +366,6 @@ async def upload_survey_file(
     try:
         # Check if user is admin - only admins can upload files
         if current_user.role != "admin":
-        
-        if not is_admin:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Only administrators can upload files to surveys"
@@ -574,7 +572,7 @@ async def check_survey_access(
             )
         
         # Get accessible files for this survey
-        if is_admin:
+        if current_user.role == "admin":
             files_data = await db.execute_query(
                 """
                 SELECT id, filename, file_size, storage_path, survey_id
@@ -605,7 +603,7 @@ async def check_survey_access(
             
             # For admins: Apply OldPyAPI simple approach - allow access to all files
             # For regular users: Check processing status
-            if is_admin:
+            if current_user.role == "admin":
                 # Admins get access to all files, following OldPyAPI simple approach
                 # Check if pickle exists but don't block access if it doesn't
                 pickle_file = os.path.join(file_dir, "survey_data.pkl")
