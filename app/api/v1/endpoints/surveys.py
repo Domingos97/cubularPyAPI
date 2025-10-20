@@ -1310,6 +1310,70 @@ async def survey_semantic_chat(
             if personality_data and personality_data["detailed_analysis_prompt"]:
                 chat_prompt = personality_data["detailed_analysis_prompt"]
 
+        # Helper to compute a short session title from the user's initial question
+        def _compute_session_title(text: str, language: str | None = None) -> str:
+            """Compute a short session title from text with simple i18n support.
+
+            Supports language codes: en, es, pt, sv (and common full names).
+            Produces a slightly longer title (up to 6 meaningful words) and
+            uses translated fallback titles when necessary.
+            """
+            import re
+
+            # Normalize language to two-letter code
+            lang_norm = (language or '').strip().lower()
+            if not lang_norm:
+                lang = 'en'
+            else:
+                # Accept values like 'en', 'en-US', 'english'
+                if '-' in lang_norm:
+                    lang_norm = lang_norm.split('-')[0]
+                lang_map = {
+                    'english': 'en', 'en': 'en',
+                    'spanish': 'es', 'es': 'es',
+                    'portuguese': 'pt', 'pt': 'pt',
+                    'swedish': 'sv', 'sv': 'sv'
+                }
+                lang = lang_map.get(lang_norm, 'en')
+
+            translations = {
+                'en': 'New Chat',
+                'es': 'Nueva conversación',
+                'pt': 'Nova conversa',
+                'sv': 'Nytt samtal'
+            }
+
+            stopwords_map = {
+                'en': {'the','a','an','and','or','of','in','on','for','to','with','about','is','are','it','this','that','these','those','my','our','your','their','be','i'},
+                'es': {'el','la','los','las','un','una','unos','unas','y','o','de','en','por','para','con','sobre','que','es','son','mi','nuestro','su','sus','se'},
+                'pt': {'o','a','os','as','um','uma','e','ou','de','em','por','para','com','sobre','que','é','são','meu','nosso','seu','seus','se'},
+                'sv': {'och','eller','av','i','på','för','med','att','är','det','den','de','min','vår','din','deras','en','ett'}
+            }
+
+            if not text:
+                return translations.get(lang, 'New Chat')
+
+            # Take the first non-empty line
+            first_line = next((ln.strip() for ln in text.splitlines() if ln.strip()), text.strip())
+
+            # Replace common punctuation with spaces
+            cleaned = re.sub(r"['\"`()\[\],.!?;:/\\-]+", ' ', first_line)
+            raw_words = [w for w in re.split(r'\s+', cleaned) if w]
+
+            stopwords = stopwords_map.get(lang, stopwords_map['en'])
+            meaningful = [w for w in raw_words if w.lower() not in stopwords]
+
+            # Increase number of words in the title for better context
+            num_words = 6
+            title_words = meaningful[:num_words] if len(meaningful) >= 1 else raw_words[:num_words]
+
+            if not title_words:
+                fallback = first_line[:60].strip()
+                return fallback or translations.get(lang, 'New Chat')
+
+            # Capitalize and join
+            return ' '.join(w.capitalize() for w in title_words)
+
         # Create session if requested
         if create_session and not session_id:
             logger.info(f"🔵 Creating new session for user {current_user.id}")
@@ -1343,7 +1407,7 @@ async def survey_semantic_chat(
 
             session_id = await db.create_chat_session(
                 user_id=current_user.id,
-                title="Survey Analysis Chat",
+                title=_compute_session_title(question, current_user.language),
                 survey_ids=survey_ids,
                 category="survey-analysis",
                 personality_id=effective_personality_id,
@@ -1605,9 +1669,61 @@ async def survey_semantic_chat_stream(
 
             # Create session if needed
             if create_session and not session_id:
+                # Compute a short, meaningful title from the user's question (language-aware)
+                def _compute_session_title(text: str, language: str | None = None) -> str:
+                    import re
+
+                    # Normalize language
+                    lang_norm = (language or '').strip().lower()
+                    if not lang_norm:
+                        lang = 'en'
+                    else:
+                        if '-' in lang_norm:
+                            lang_norm = lang_norm.split('-')[0]
+                        lang_map = {
+                            'english': 'en', 'en': 'en',
+                            'spanish': 'es', 'es': 'es',
+                            'portuguese': 'pt', 'pt': 'pt',
+                            'swedish': 'sv', 'sv': 'sv'
+                        }
+                        lang = lang_map.get(lang_norm, 'en')
+
+                    translations = {
+                        'en': 'New Chat',
+                        'es': 'Nueva conversación',
+                        'pt': 'Nova conversa',
+                        'sv': 'Nytt samtal'
+                    }
+
+                    stopwords_map = {
+                        'en': {'the','a','an','and','or','of','in','on','for','to','with','about','is','are','it','this','that','these','those','my','our','your','their','be','i'},
+                        'es': {'el','la','los','las','un','una','unos','unas','y','o','de','en','por','para','con','sobre','que','es','son','mi','nuestro','su','sus','se'},
+                        'pt': {'o','a','os','as','um','uma','e','ou','de','em','por','para','com','sobre','que','é','são','meu','nosso','seu','seus','se'},
+                        'sv': {'och','eller','av','i','på','för','med','att','är','det','den','de','min','vår','din','deras','en','ett'}
+                    }
+
+                    if not text:
+                        return translations.get(lang, 'New Chat')
+
+                    first_line = next((ln.strip() for ln in text.splitlines() if ln.strip()), text.strip())
+                    cleaned = re.sub(r"['\"`()\[\],.!?;:/\\-]+", ' ', first_line)
+                    raw_words = [w for w in re.split(r'\s+', cleaned) if w]
+
+                    stopwords = stopwords_map.get(lang, stopwords_map['en'])
+                    meaningful = [w for w in raw_words if w.lower() not in stopwords]
+
+                    num_words = 6
+                    title_words = meaningful[:num_words] if len(meaningful) >= 1 else raw_words[:num_words]
+
+                    if not title_words:
+                        fallback = first_line[:60].strip()
+                        return fallback or translations.get(lang, 'New Chat')
+
+                    return ' '.join(w.capitalize() for w in title_words)
+
                 session_id = await db.create_chat_session(
                     user_id=current_user.id,
-                    title="Survey Analysis Chat",
+                    title=_compute_session_title(question, current_user.language),
                     survey_ids=survey_ids,
                     category="survey-analysis",
                     personality_id=effective_personality_id,
