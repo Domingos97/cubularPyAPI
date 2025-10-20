@@ -3,6 +3,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.openapi.utils import get_openapi
+from fastapi.staticfiles import StaticFiles
+import os
 from contextlib import asynccontextmanager
 import time
 import uuid
@@ -105,6 +107,16 @@ app = FastAPI(
     redirect_slashes=False,
     lifespan=lifespan
 )
+
+# Mount static files for uploads (avatars, etc.) if the directory exists; otherwise skip
+static_dir = os.path.join(os.path.dirname(__file__), "app", "static")
+if os.path.exists(static_dir):
+    app.mount("/static", StaticFiles(directory=static_dir, html=False), name="static")
+else:
+    # Fallback: mount from project-relative path if created later
+    rel_static = os.path.join("app", "static")
+    if os.path.exists(rel_static):
+        app.mount("/static", StaticFiles(directory=rel_static, html=False), name="static")
 
 # Custom OpenAPI schema
 def custom_openapi():
