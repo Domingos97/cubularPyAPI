@@ -36,6 +36,8 @@ class SimpleUser:
         self.created_at = user_data.get("created_at")
         self.updated_at = user_data.get("updated_at")
         self.preferred_personality = str(user_data.get("preferred_personality")) if user_data.get("preferred_personality") else None
+        # New flag for AI personalities access
+        self.has_ai_personalities_access = bool(user_data.get("has_ai_personalities_access", False))
 
 
 async def get_current_user(

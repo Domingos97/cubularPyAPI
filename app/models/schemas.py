@@ -40,6 +40,7 @@ class User(BaseSchema):
     id: str
     email: str
     username: Optional[str] = None
+    avatar: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
     preferred_personality: Optional[str] = None
@@ -49,6 +50,7 @@ class User(BaseSchema):
     role_details: Optional[Dict[str, str]] = None
     personality_details: Optional[Dict[str, Any]] = None
     welcome_popup_dismissed: Optional[bool] = None
+    has_ai_personalities_access: Optional[bool] = None
 
 # Extended user schema with access permissions for frontend
 class UserWithAccess(User):
@@ -70,7 +72,9 @@ class UserUpdate(BaseSchema):
     password: Optional[str] = None
     language: Optional[str] = None
     preferred_personality: Optional[str] = None
+    avatar: Optional[str] = None
     welcome_popup_dismissed: Optional[bool] = None
+    has_ai_personalities_access: Optional[bool] = None
 
 # Keep UserResponse as alias for backward compatibility
 UserResponse = User
@@ -523,26 +527,6 @@ class SupportedLanguageResponse(SupportedLanguageBase):
     created_at: datetime
     updated_at: datetime
 
-# Prompt Translation schemas
-class PromptTranslationBase(BaseSchema):
-    prompt_key: str = Field(..., description="Unique identifier for the prompt")
-    language_code: str = Field(..., description="Language code from supported_languages")
-    translated_text: str = Field(..., description="Translated text")
-    context: Optional[str] = Field(None, description="Context for translators")
-
-class PromptTranslationCreate(PromptTranslationBase):
-    pass
-
-class PromptTranslationUpdate(BaseSchema):
-    translated_text: Optional[str] = None
-    context: Optional[str] = None
-
-class PromptTranslationResponse(PromptTranslationBase):
-    id: uuid.UUID
-    created_by: Optional[uuid.UUID]
-    created_at: datetime
-    updated_at: datetime
-
 # Language detection and config schemas
 class LanguageDetectionResult(BaseSchema):
     language: str = Field(..., description="Detected language code")
@@ -939,48 +923,12 @@ class EmailStats(BaseSchema):
     total_pending: int
     recent_emails: List[EmailLogResponse]
 
-# Advanced Prompt Translation schemas
-class AdvancedPromptTranslationBase(BaseSchema):
-    prompt_key: str = Field(..., description="Unique identifier for the prompt")
-    language_code: str = Field(..., description="Target language code")
-    translated_text: str = Field(..., description="Translated prompt text")
-    context: Optional[str] = Field(None, description="Translation context")
-    personality_id: Optional[uuid.UUID] = Field(None, description="AI personality this translation is for")
-    prompt_type: str = Field(..., description="Type of prompt (system, analysis, suggestion)")
-
-class AdvancedPromptTranslationCreate(AdvancedPromptTranslationBase):
-    pass
-
-class AdvancedPromptTranslationUpdate(BaseSchema):
-    translated_text: Optional[str] = None
-    context: Optional[str] = None
-    personality_id: Optional[uuid.UUID] = None
-    prompt_type: Optional[str] = None
-    is_active: Optional[bool] = None
-
-class AdvancedPromptTranslationResponse(AdvancedPromptTranslationBase):
-    id: uuid.UUID
-    is_active: bool
-    created_by: Optional[uuid.UUID]
-    created_at: datetime
-    updated_at: datetime
 
 class TranslationBulkRequest(BaseSchema):
     prompts: List[Dict[str, str]] = Field(..., description="List of prompts to translate")
     target_languages: List[str] = Field(..., description="Target language codes")
     personality_id: Optional[uuid.UUID] = None
 
-class TranslationBulkResponse(BaseSchema):
-    success_count: int
-    error_count: int
-    translations: List[AdvancedPromptTranslationResponse]
-    errors: List[str]
-
-class TranslationStats(BaseSchema):
-    total_translations: int
-    languages_supported: int
-    personality_translations: Dict[str, int]
-    recent_translations: List[AdvancedPromptTranslationResponse]
 
 # Simple Suggestions schemas
 class SimpleSuggestionBase(BaseSchema):

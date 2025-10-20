@@ -12,6 +12,8 @@ from app.models.schemas import (
 )
 from app.utils.logging import get_logger
 from app.utils.validation import ValidationHelpers
+from fastapi import UploadFile, File
+import os, uuid
 
 logger = get_logger(__name__)
 
@@ -50,9 +52,10 @@ async def get_current_regular_user_profile(
         language_preference=current_user.language,
         role_id=None,  # SimpleUser doesn't have roleid, we'll use role string
         role=current_user.role,
-        role_details=None,  # SimpleUser doesn't have role object
-        personality_details=None,  # Will be populated if needed
-        welcome_popup_dismissed=current_user.welcome_popup_dismissed
+            role_details=None,  # SimpleUser doesn't have role object
+            personality_details=None,  # Will be populated if needed
+            welcome_popup_dismissed=current_user.welcome_popup_dismissed,
+            has_ai_personalities_access=getattr(current_user, 'has_ai_personalities_access', False)
     )
 
 
@@ -102,6 +105,88 @@ async def update_current_user_profile(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Profile update failed"
         )
+
+
+@router.post('/me/avatar')
+async def upload_current_user_avatar(
+    file: UploadFile = File(...),
+    current_user: SimpleUser = Depends(get_current_regular_user),
+    db: LightweightDBService = Depends(get_lightweight_db)
+):
+    """
+    Upload avatar for current user. Validates type/size, stores under /static/avatars and updates user record.
+    """
+    try:
+        # Basic validations
+        allowed_types = ['image/png', 'image/jpeg', 'image/gif', 'image/webp']
+        if file.content_type not in allowed_types:
+            raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail='Unsupported file type')
+
+        contents = await file.read()
+        max_size = 2 * 1024 * 1024  # 2MB
+        if len(contents) > max_size:
+            raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail='File too large')
+
+        # Remove previous avatar file if it exists and is stored in our avatars folder
+        try:
+            existing = await db.get_user_by_id(str(current_user.id))
+            if existing and existing.get('avatar'):
+                old_avatar = existing.get('avatar')
+                # Only attempt deletion for files under our avatars static path
+                if isinstance(old_avatar, str) and old_avatar.startswith('/static/avatars/'):
+                    # Check if any other user references the same avatar path. If so, skip deletion.
+                    try:
+                        count_row = await db.execute_fetchrow("SELECT COUNT(*) AS cnt FROM users WHERE avatar = $1", [old_avatar])
+                        count = int(count_row.get('cnt')) if count_row and count_row.get('cnt') is not None else 0
+                    except Exception as e_count:
+                        # If we can't determine references, skip deletion to be safe
+                        logger.warning(f"Could not count avatar references for {old_avatar}: {e_count}")
+                        count = 2
+
+                    if count <= 1:
+                        old_filename = old_avatar.split('/')[-1]
+                        old_path = os.path.join('app', 'static', 'avatars', old_filename)
+                        try:
+                            if os.path.exists(old_path):
+                                os.remove(old_path)
+                                logger.info(f"Deleted old avatar file for user {current_user.id}: {old_path}")
+                        except Exception as e_del:
+                            # Log and continue - don't fail the upload because of file deletion issues
+                            logger.warning(f"Failed to delete old avatar file {old_path} for user {current_user.id}: {e_del}")
+                    else:
+                        logger.info(f"Skipping deletion of avatar {old_avatar} because it's referenced by {count} users")
+        except Exception as e_get:
+            # If we fail to fetch the existing user for any reason, log and continue
+            logger.warning(f"Could not fetch existing user to delete avatar for {current_user.id}: {e_get}")
+
+        # Save new file
+        avatars_dir = os.path.join('app', 'static', 'avatars')
+        os.makedirs(avatars_dir, exist_ok=True)
+        ext = (file.filename.rsplit('.', 1)[-1] if '.' in file.filename else 'png')
+        filename = f"{uuid.uuid4()}.{ext}"
+        save_path = os.path.join(avatars_dir, filename)
+        with open(save_path, 'wb') as f:
+            f.write(contents)
+
+        public_path = f"/static/avatars/{filename}"
+
+        # Update db with new avatar path
+        # Use a tiny TempUpdate object so the lightweight DB service picks up avatar
+        class TempUpdate: pass
+        temp = TempUpdate()
+        temp.avatar = public_path
+        updated = await db.update_user_profile(str(current_user.id), temp)
+
+        if not updated:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail='Failed to update user profile with avatar')
+
+        return { 'avatar': public_path }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Avatar upload failed: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail='Avatar upload failed')
 
 
 @router.get("/me/stats")
@@ -196,18 +281,19 @@ async def get_all_users(
                 id=str(user["id"]),
                 email=user["email"],
                 username=user["username"],
-                created_at=user["created_at"].isoformat() if user.get("created_at") else "",
-                updated_at=user["updated_at"].isoformat() if user.get("updated_at") else "",
-                preferred_personality=str(user["preferred_personality"]) if user.get("preferred_personality") else None,
-                language_preference=user.get("language"),
-                role_id=str(user["roleid"]) if user.get("roleid") else None,
-                role=user.get("role_name"),
-                role_details={
-                    "id": str(user["roleid"]),
-                    "name": user.get("role_name")
-                } if user.get("roleid") else None,
-                personality_details=None,
-                welcome_popup_dismissed=user.get("welcome_popup_dismissed", False)
+                        created_at=user["created_at"].isoformat() if user.get("created_at") else "",
+                        updated_at=user["updated_at"].isoformat() if user.get("updated_at") else "",
+                        preferred_personality=str(user["preferred_personality"]) if user.get("preferred_personality") else None,
+                        language_preference=user.get("language"),
+                        role_id=str(user["roleid"]) if user.get("roleid") else None,
+                        role=user.get("role_name"),
+                        role_details={
+                            "id": str(user["roleid"]),
+                            "name": user.get("role_name")
+                        } if user.get("roleid") else None,
+                        personality_details=None,
+                        welcome_popup_dismissed=user.get("welcome_popup_dismissed", False),
+                        has_ai_personalities_access=user.get("has_ai_personalities_access", False)
             )
             for user in users
         ]
@@ -303,6 +389,7 @@ async def get_user_by_id(
             language_preference=user.get("language"),
             preferred_personality=str(user.get("preferred_personality")) if user.get("preferred_personality") else None,
             welcome_popup_dismissed=user.get("welcome_popup_dismissed"),
+            has_ai_personalities_access=user.get("has_ai_personalities_access", False),
             created_at=user["created_at"].isoformat() if user["created_at"] else None,
             updated_at=user["updated_at"].isoformat() if user["updated_at"] else None,
             role=user["role_name"] if user["role_name"] else None,

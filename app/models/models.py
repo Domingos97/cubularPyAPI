@@ -55,7 +55,11 @@ class User(BaseModel):
     language = Column(String(10), default="en")
     roleid = Column(UUID(as_uuid=True), ForeignKey("roles.id"), nullable=False)
     preferred_personality = Column(UUID(as_uuid=True), ForeignKey("ai_personalities.id"))
+    # Optional avatar path or URL
+    avatar = Column(String(255))
     welcome_popup_dismissed = Column(Boolean, default=False)
+    # New flag to indicate if the user has access to AI personalities features
+    has_ai_personalities_access = Column(Boolean, default=False)
     email_confirmed = Column(Boolean, default=False)
     email_confirmation_token = Column(String(500))
     last_login = Column(DateTime(timezone=True))
@@ -343,31 +347,6 @@ class SupportedLanguage(BaseModel):
     # No relationships needed for this simple lookup table
 
 
-class PromptTranslation(BaseModel):
-    """Prompt translations table"""
-    __tablename__ = "prompt_translations"
-    
-    prompt_key = Column(String(255), nullable=False, index=True)  # Unique identifier for the prompt
-    language_code = Column(String(10), ForeignKey("supported_languages.code"), nullable=False)
-    translated_text = Column(Text, nullable=False)
-    context = Column(String(500))  # Context for translators
-    created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"))
-    
-    # New fields for personality-specific prompt translations
-    personality_id = Column(UUID(as_uuid=True), ForeignKey("ai_personalities.id"))
-    prompt_type = Column(String(50), default="system")  # 'system', 'detailed_analysis', 'suggestions'
-    
-    # Relationships
-    language = relationship("SupportedLanguage")
-    created_by_user = relationship("User")
-    personality = relationship("AIPersonality")
-
-
-# SurveySuggestion and SurveyAnalytics models REMOVED - Not actual database tables
-
-# Enhanced Chat models REMOVED - No longer needed with streamlined_chat approach
-
-
 # Create indexes for better performance
 Index('idx_users_email', User.email)
 Index('idx_users_roleid', User.roleid)
@@ -387,7 +366,3 @@ Index('idx_user_survey_file_access_user_id', UserSurveyFileAccess.user_id)
 Index('idx_user_survey_file_access_file_id', UserSurveyFileAccess.survey_file_id)
 Index('idx_supported_languages_code', SupportedLanguage.code)
 Index('idx_supported_languages_enabled', SupportedLanguage.enabled)
-Index('idx_prompt_translations_key', PromptTranslation.prompt_key)
-Index('idx_prompt_translations_language', PromptTranslation.language_code)
-# Survey suggestion and analytics indexes REMOVED - models don't exist in database
-# Enhanced Chat indexes REMOVED - models no longer exist

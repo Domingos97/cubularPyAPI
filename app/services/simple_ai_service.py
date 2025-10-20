@@ -130,6 +130,36 @@ If no survey responses are found, explain what insights COULD be drawn IF there 
             return False
             
         return True
+
+    def _normalize_model_for_provider(self, provider: str, model: str) -> str:
+        """Normalize stored model strings for the specific provider API.
+
+        - If model is stored as 'provider/name' and target provider expects plain name (e.g. openai, anthropic), strip prefix.
+        - If target is openrouter and model is plain (no '/'), prefix with 'openai/' as a sensible default for common cases.
+        Assumptions: when in doubt, prefer the simplest transformation that will work with the provider's API.
+        """
+        if not model:
+            return model
+
+        # Split into parts
+        parts = model.split('/')
+
+        lp = provider.lower() if provider else ''
+
+        # For OpenAI and Anthropic, APIs expect bare model names (no provider/ prefix)
+        if lp in ('openai', 'anthropic', 'google', 'cohere'):
+            return parts[-1]
+
+        # For OpenRouter, many models are in the form 'provider/name' (e.g. 'openai/gpt-4o-mini').
+        # If stored model already contains a '/', keep it. Otherwise, default to prefixing with 'openai/'.
+        if lp == 'openrouter':
+            if len(parts) > 1:
+                return model
+            # default prefix for common OpenAI-origin models
+            return f"openai/{model}"
+
+        # Default: return model unchanged
+        return model
         
     async def _make_http_request_with_retry(self, url: str, headers: dict, payload: dict, 
                                           provider: str, max_retries: int = 2) -> dict:
@@ -257,54 +287,55 @@ If no survey responses are found, explain what insights COULD be drawn IF there 
             config["temperature"] = temperature if temperature is not None else config["temperature"]
             config["max_tokens"] = max_tokens or config["max_tokens"]
             logger.info(f"Using database configuration for ai_chat_integration")
-        
-        api_key = config["api_key"]
-        provider = config["provider"].lower()
-        model = config["model"]
-        temperature = config["temperature"]
-        max_tokens = config["max_tokens"]
-        
-        if not api_key:
-            raise ValueError(f"API key not found for provider: {provider}")
-        
-        # Set up API endpoint and headers based on provider
-        if provider == "openrouter":
-            api_url = "https://openrouter.ai/api/v1/chat/completions"
-            headers = {
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-                "HTTP-Referer": "https://cubular.com",  # Required for OpenRouter
-                "X-Title": "Cubular AI Assistant"
+
+            api_key = config["api_key"]
+            provider = config["provider"].lower()
+            # Normalize model string for target provider API
+            model = self._normalize_model_for_provider(provider, config["model"])
+            temperature = config["temperature"]
+            max_tokens = config["max_tokens"]
+
+            if not api_key:
+                raise ValueError(f"API key not found for provider: {provider}")
+
+            # Set up API endpoint and headers based on provider
+            if provider == "openrouter":
+                api_url = "https://openrouter.ai/api/v1/chat/completions"
+                headers = {
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                    "HTTP-Referer": "https://cubular.com",  # Required for OpenRouter
+                    "X-Title": "Cubular AI Assistant"
+                }
+            elif provider == "openai":
+                api_url = "https://api.openai.com/v1/chat/completions"
+                headers = {
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json"
+                }
+            elif provider == "anthropic":
+                return await self.generate_anthropic_response(messages, model, temperature, max_tokens)
+            else:
+                raise ValueError(f"Unsupported provider: {provider}")
+
+            payload = {
+                "model": model,
+                "messages": messages,
+                "temperature": temperature,
+                "max_tokens": max_tokens
             }
-        elif provider == "openai":
-            api_url = "https://api.openai.com/v1/chat/completions"
-            headers = {
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json"
-            }
-        elif provider == "anthropic":
-            return await self.generate_anthropic_response(messages, model, temperature, max_tokens)
-        else:
-            raise ValueError(f"Unsupported provider: {provider}")
-        
-        payload = {
-            "model": model,
-            "messages": messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens
-        }
-        
-        try:
-            # Use optimized HTTP client with retry mechanism
-            result = await self._make_http_request_with_retry(api_url, headers, payload, provider)
-            ai_response = result["choices"][0]["message"]["content"]
-            
-            logger.info(f"Successfully generated response using {provider} provider")
-            return ai_response
-            
-        except Exception as e:
-            logger.error(f"{provider.upper()} API error: {e}")
-            raise
+
+            try:
+                # Use optimized HTTP client with retry mechanism
+                result = await self._make_http_request_with_retry(api_url, headers, payload, provider)
+                ai_response = result["choices"][0]["message"]["content"]
+
+                logger.info(f"Successfully generated response using {provider} provider")
+                return ai_response
+
+            except Exception as e:
+                logger.error(f"{provider.upper()} API error: {e}")
+                raise
     
     async def generate_anthropic_response(self, messages: List[Dict], model: str = None,
                                         temperature: float = None, max_tokens: int = None) -> str:
@@ -320,13 +351,13 @@ If no survey responses are found, explain what insights COULD be drawn IF there 
             raise ValueError("Anthropic API key not configured in database")
         
         api_key = config["api_key"]
-        model = model or config["model"]
+        model = model or self._normalize_model_for_provider("anthropic", config.get("model") or '')
         temperature = temperature if temperature is not None else config["temperature"]
         max_tokens = max_tokens or config["max_tokens"]
         
         if not api_key:
             raise ValueError("Anthropic API key not found in database configuration")
-        
+
         headers = {
             "x-api-key": api_key,
             "Content-Type": "application/json",
@@ -399,12 +430,13 @@ If no survey responses are found, explain what insights COULD be drawn IF there 
         # Decrypt API key
         encrypted_api_key = config_data["api_key"]
         api_key = encryption_service.decrypt_api_key(encrypted_api_key)
-        
+
         if not api_key:
             raise ValueError("OpenRouter API key not found or could not be decrypted")
-        
-        # Set defaults
-        model = model or "openai/gpt-4o-mini"
+
+        # Set defaults (normalize for OpenRouter expectation)
+        model = model or config.get("model") or "openai/gpt-4o-mini"
+        model = self._normalize_model_for_provider("openrouter", model)
         temperature = float(temperature) if temperature is not None else 0.7
         max_tokens = max_tokens or 1000
         
@@ -458,8 +490,8 @@ If no survey responses are found, explain what insights COULD be drawn IF there 
                 raise ValueError("API configuration not found in database")
             
             api_key = api_key or config["api_key"]
-            model = model or config["model"]
             provider = provider or config["provider"]
+            model = model or self._normalize_model_for_provider(provider or config.get("provider", "openai"), config.get("model") or '')
             temperature = temperature if temperature is not None else config.get("temperature", 0.7)
             max_tokens = max_tokens or config.get("max_tokens", 1000)
         

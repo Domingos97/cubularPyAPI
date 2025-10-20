@@ -125,7 +125,9 @@ class LightweightAuthService:
                 "email": user["email"],
                 "role": user.get("role_name", "user"),  # Include role in JWT
                 "language": user.get("language", "en-US"),
-                "welcome_popup_dismissed": user.get("welcome_popup_dismissed", False)
+                "welcome_popup_dismissed": user.get("welcome_popup_dismissed", False),
+                # Include AI personalities access flag so frontend can decide to show UI
+                "has_ai_personalities_access": bool(user.get("has_ai_personalities_access", False))
             },
             expires_delta=timedelta(minutes=settings.access_token_expire_minutes)
         )
@@ -167,7 +169,9 @@ class LightweightAuthService:
                 "email": token_data["email"],
                 "role": token_data.get("role_name", "user"),  # Include role in JWT
                 "language": token_data.get("language", "en-US"),
-                "welcome_popup_dismissed": token_data.get("welcome_popup_dismissed", False)
+                "welcome_popup_dismissed": token_data.get("welcome_popup_dismissed", False),
+                # Propagate AI personalities access flag from the user record
+                "has_ai_personalities_access": bool(token_data.get("has_ai_personalities_access", False))
             },
             expires_delta=timedelta(minutes=settings.access_token_expire_minutes)
         )

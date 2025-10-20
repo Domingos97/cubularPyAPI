@@ -1313,6 +1313,34 @@ async def survey_semantic_chat(
         # Create session if requested
         if create_session and not session_id:
             logger.info(f"🔵 Creating new session for user {current_user.id}")
+            # If no specific files were provided, auto-collect processed files the user has access to
+            if (not selected_file_ids or len(selected_file_ids) == 0) and survey_ids:
+                try:
+                    auto_files = []
+                    for sid in survey_ids:
+                        # For each survey, get processed files accessible to the user
+                        if current_user.role in ["admin", "super_admin"]:
+                            files = await db.execute_query(
+                                "SELECT id FROM survey_files WHERE survey_id = $1",
+                                [sid]
+                            )
+                        else:
+                            files = await db.execute_query(
+                                "SELECT sf.id FROM survey_files sf INNER JOIN surveys s ON sf.survey_id = s.id INNER JOIN user_survey_access usa ON s.id = usa.survey_id WHERE sf.survey_id = $1 AND usa.user_id = $2 AND usa.is_active = true",
+                                [sid, current_user.id]
+                            )
+                        # Only include files that have been processed (pickle exists)
+                        for f in files:
+                            file_id = str(f.get('id'))
+                            pickle_path = os.path.join('survey_data', sid, file_id, 'survey_data.pkl')
+                            if os.path.exists(pickle_path):
+                                auto_files.append(file_id)
+                    # Deduplicate
+                    selected_file_ids = list(dict.fromkeys(auto_files))
+                    logger.info(f"Auto-collected {len(selected_file_ids)} processed files for session creation for user {current_user.id}")
+                except Exception as e_auto:
+                    logger.warning(f"Failed to auto-collect files for session creation: {e_auto}")
+
             session_id = await db.create_chat_session(
                 user_id=current_user.id,
                 title="Survey Analysis Chat",

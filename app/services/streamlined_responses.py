@@ -8,6 +8,7 @@ No schema validation overhead, just clean data transformation.
 from typing import Dict, List, Any, Optional
 from datetime import datetime
 import uuid
+import json
 
 
 class StreamlinedResponses:
@@ -281,13 +282,15 @@ class StreamingResponseHelper:
                 full_response += chunk
                 yield f"data: {{\n"
                 yield f'  "type": "content",\n'
-                yield f'  "content": "{chunk.replace('"', '\\"')}"\n'
+                # Use json.dumps to safely escape the chunk into a JSON string
+                yield f'  "content": {json.dumps(chunk)}\n'
                 yield f"}}\n\n"
         
         # Final response
         yield f"data: {{\n"
         yield f'  "type": "complete",\n'
-        yield f'  "full_response": "{full_response.replace('"', '\\"')}",\n'
+        # Use json.dumps to safely escape the full response into a JSON string
+        yield f'  "full_response": {json.dumps(full_response)},\n'
         yield f'  "ai_message_id": "{ai_message_id}"\n'
         yield f"}}\n\n"
 

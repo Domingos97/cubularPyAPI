@@ -6,11 +6,9 @@ Mimics TypeScript API's approach with raw SQL queries and minimal overhead.
 """
 
 import asyncpg
-import json
 import uuid
-from typing import Dict, List, Any, Optional, Union
+from typing import Dict, List, Any, Optional
 from datetime import datetime
-import asyncio
 from contextlib import asynccontextmanager
 
 from app.core.config import settings
@@ -1260,27 +1258,66 @@ class LightweightDBService:
     
     async def get_user_by_email(self, email: str) -> Optional[Dict[str, Any]]:
         """Get user by email with role information - optimized"""
-        query = """
+        query_with_flag = """
         SELECT u.id, u.email, u.username, u.password, u.language, 
-               u.email_confirmed, u.welcome_popup_dismissed, u.last_login,
-               u.created_at, u.updated_at, u.preferred_personality, r.role as role_name
+           u.email_confirmed, u.welcome_popup_dismissed, u.last_login,
+       u.created_at, u.updated_at, u.preferred_personality, u.has_ai_personalities_access, u.avatar, r.role as role_name
         FROM users u
         LEFT JOIN roles r ON u.roleid = r.id
         WHERE u.email = $1
         """
-        return await self.execute_fetchrow(query, [email])
+
+        # Some deployments may not have run the migration that adds
+        # `has_ai_personalities_access`. If the column is missing the
+        # SELECT will raise asyncpg.UndefinedColumnError; in that case
+        # retry with a fallback query that omits the column and set the
+        # flag to False by default.
+        try:
+            return await self.execute_fetchrow(query_with_flag, [email])
+        except asyncpg.UndefinedColumnError:
+            logger.warning("Users table missing 'has_ai_personalities_access' column, using fallback query")
+            query_fallback = """
+            SELECT u.id, u.email, u.username, u.password, u.language, 
+                   u.email_confirmed, u.welcome_popup_dismissed, u.last_login,
+             u.created_at, u.updated_at, u.preferred_personality, r.role as role_name
+            FROM users u
+            LEFT JOIN roles r ON u.roleid = r.id
+            WHERE u.email = $1
+            """
+            row = await self.execute_fetchrow(query_fallback, [email])
+            if row is not None:
+                row.setdefault('has_ai_personalities_access', False)
+                row.setdefault('avatar', None)
+            return row
     
     async def get_user_by_id(self, user_id: str) -> Optional[Dict[str, Any]]:
         """Get user by ID with role information"""
-        query = """
+        query_with_flag = """
         SELECT u.id, u.email, u.username, u.password, u.language, 
-               u.email_confirmed, u.welcome_popup_dismissed, u.last_login,
-               u.created_at, u.updated_at, u.preferred_personality, r.role as role_name
+           u.email_confirmed, u.welcome_popup_dismissed, u.last_login,
+       u.created_at, u.updated_at, u.preferred_personality, u.has_ai_personalities_access, u.avatar, r.role as role_name
         FROM users u
         LEFT JOIN roles r ON u.roleid = r.id
         WHERE u.id = $1
         """
-        return await self.execute_fetchrow(query, [user_id])
+
+        try:
+            return await self.execute_fetchrow(query_with_flag, [user_id])
+        except asyncpg.UndefinedColumnError:
+            logger.warning("Users table missing 'has_ai_personalities_access' column, using fallback query")
+            query_fallback = """
+            SELECT u.id, u.email, u.username, u.password, u.language, 
+                   u.email_confirmed, u.welcome_popup_dismissed, u.last_login,
+             u.created_at, u.updated_at, u.preferred_personality, r.role as role_name
+            FROM users u
+            LEFT JOIN roles r ON u.roleid = r.id
+            WHERE u.id = $1
+            """
+            row = await self.execute_fetchrow(query_fallback, [user_id])
+            if row is not None:
+                row.setdefault('has_ai_personalities_access', False)
+                row.setdefault('avatar', None)
+            return row
     
     async def create_user(self, email: str, username: str, hashed_password: str, language: str = "en-US") -> Dict[str, Any]:
         """Create a new user with default role"""
@@ -1337,13 +1374,31 @@ class LightweightDBService:
         """Get refresh token with user information"""
         query = """
         SELECT rt.id, rt.user_id, rt.token, rt.expires_at, rt.is_revoked,
-               u.email, u.username, u.language, u.welcome_popup_dismissed, r.role as role_name
+         u.email, u.username, u.language, u.welcome_popup_dismissed, u.has_ai_personalities_access, u.avatar, r.role as role_name
         FROM refresh_tokens rt
         JOIN users u ON rt.user_id = u.id
         LEFT JOIN roles r ON u.roleid = r.id
         WHERE rt.token = $1 AND rt.is_revoked = false
         """
-        return await self.execute_fetchrow(query, [refresh_token])
+
+        try:
+            return await self.execute_fetchrow(query, [refresh_token])
+        except asyncpg.UndefinedColumnError:
+            # Fallback for older DB schemas without the flag
+            logger.warning("Users table missing 'has_ai_personalities_access' column in refresh token lookup, falling back")
+            query_fallback = """
+            SELECT rt.id, rt.user_id, rt.token, rt.expires_at, rt.is_revoked,
+                   u.email, u.username, u.language, u.welcome_popup_dismissed, r.role as role_name
+            FROM refresh_tokens rt
+            JOIN users u ON rt.user_id = u.id
+            LEFT JOIN roles r ON u.roleid = r.id
+            WHERE rt.token = $1 AND rt.is_revoked = false
+            """
+            row = await self.execute_fetchrow(query_fallback, [refresh_token])
+            if row is not None:
+                row.setdefault('has_ai_personalities_access', False)
+                row.setdefault('avatar', None)
+            return row
     
     async def revoke_refresh_token(self, refresh_token: str) -> bool:
         """Revoke a specific refresh token"""
@@ -1368,16 +1423,36 @@ class LightweightDBService:
     
     async def get_all_users(self, skip: int = 0, limit: int = 50) -> List[Dict[str, Any]]:
         """Get all users with role information"""
-        query = """
+        query_with_flag = """
         SELECT u.id, u.email, u.username, u.language, 
-               u.email_confirmed, u.welcome_popup_dismissed, u.last_login,
-               u.created_at, u.updated_at, u.preferred_personality, r.role as role_name, u.roleid
+         u.email_confirmed, u.welcome_popup_dismissed, u.last_login, u.has_ai_personalities_access, u.avatar,
+         u.created_at, u.updated_at, u.preferred_personality, r.role as role_name, u.roleid
         FROM users u
         LEFT JOIN roles r ON u.roleid = r.id
         ORDER BY u.created_at DESC
         LIMIT $1 OFFSET $2
         """
-        return await self.execute_query(query, [limit, skip])
+
+        try:
+            rows = await self.execute_query(query_with_flag, [limit, skip])
+            return rows
+        except asyncpg.UndefinedColumnError:
+            logger.warning("Users table missing 'has_ai_personalities_access' column, using fallback query for get_all_users")
+            query_fallback = """
+            SELECT u.id, u.email, u.username, u.language, 
+             u.email_confirmed, u.welcome_popup_dismissed, u.last_login,
+             u.created_at, u.updated_at, u.preferred_personality, r.role as role_name, u.roleid
+            FROM users u
+            LEFT JOIN roles r ON u.roleid = r.id
+            ORDER BY u.created_at DESC
+            LIMIT $1 OFFSET $2
+            """
+            rows = await self.execute_query(query_fallback, [limit, skip])
+            # Ensure backward compatibility: add missing flag default False and avatar default
+            for r in rows:
+                r.setdefault('has_ai_personalities_access', False)
+                r.setdefault('avatar', None)
+            return rows
     
     async def update_user_password(self, user_id: str, hashed_password: str) -> bool:
         """Update user password"""
@@ -1472,6 +1547,17 @@ class LightweightDBService:
                 param_count += 1
                 set_clauses.append(f"welcome_popup_dismissed = ${param_count}")
                 params.append(user_update.welcome_popup_dismissed)
+
+            if hasattr(user_update, 'avatar') and user_update.avatar is not None:
+                param_count += 1
+                set_clauses.append(f"avatar = ${param_count}")
+                params.append(user_update.avatar)
+            
+            # Allow updating the AI personalities access flag
+            if hasattr(user_update, 'has_ai_personalities_access') and user_update.has_ai_personalities_access is not None:
+                param_count += 1
+                set_clauses.append(f"has_ai_personalities_access = ${param_count}")
+                params.append(bool(user_update.has_ai_personalities_access))
             
             if not set_clauses:
                 # No fields to update
@@ -1494,8 +1580,75 @@ class LightweightDBService:
             RETURNING *
             """
             
-            result = await self.execute_fetchrow(query, params)
-            return result
+            try:
+                result = await self.execute_fetchrow(query, params)
+                return result
+            except asyncpg.UndefinedColumnError:
+                # Database may not have the has_ai_personalities_access column yet.
+                # Retry the UPDATE without that column to avoid failing the whole request.
+                logger.warning("Users table missing 'has_ai_personalities_access' column, retrying update without it")
+
+                # Rebuild query omitting has_ai_personalities_access
+                set_clauses2 = []
+                params2 = []
+                param_count2 = 0
+
+                if hasattr(user_update, 'username') and user_update.username is not None:
+                    param_count2 += 1
+                    set_clauses2.append(f"username = ${param_count2}")
+                    params2.append(user_update.username)
+                if hasattr(user_update, 'email') and user_update.email is not None:
+                    param_count2 += 1
+                    set_clauses2.append(f"email = ${param_count2}")
+                    params2.append(user_update.email)
+                if hasattr(user_update, 'password') and user_update.password is not None:
+                    from passlib.context import CryptContext
+                    pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+                    hashed_password = pwd_context.hash(user_update.password)
+                    param_count2 += 1
+                    set_clauses2.append(f"password = ${param_count2}")
+                    params2.append(hashed_password)
+                if hasattr(user_update, 'language') and user_update.language is not None:
+                    param_count2 += 1
+                    set_clauses2.append(f"language = ${param_count2}")
+                    params2.append(user_update.language)
+                if hasattr(user_update, 'preferred_personality') and user_update.preferred_personality is not None:
+                    param_count2 += 1
+                    set_clauses2.append(f"preferred_personality = ${param_count2}")
+                    params2.append(str(user_update.preferred_personality))
+                if hasattr(user_update, 'welcome_popup_dismissed') and user_update.welcome_popup_dismissed is not None:
+                    param_count2 += 1
+                    set_clauses2.append(f"welcome_popup_dismissed = ${param_count2}")
+                    params2.append(user_update.welcome_popup_dismissed)
+                if hasattr(user_update, 'avatar') and user_update.avatar is not None:
+                    param_count2 += 1
+                    set_clauses2.append(f"avatar = ${param_count2}")
+                    params2.append(user_update.avatar)
+
+                if not set_clauses2:
+                    return await self.get_user_by_id(user_id)
+
+                param_count2 += 1
+                set_clauses2.append(f"updated_at = ${param_count2}")
+                params2.append(datetime.utcnow())
+
+                param_count2 += 1
+                params2.append(user_id)
+
+                set_clause2 = ", ".join(set_clauses2)
+                query2 = f"""
+                UPDATE users 
+                SET {set_clause2}
+                WHERE id = ${param_count2}
+                RETURNING *
+                """
+
+                try:
+                    result2 = await self.execute_fetchrow(query2, params2)
+                    return result2
+                except Exception as e2:
+                    logger.error(f"Retry update_user_profile failed without ai flag: {e2}")
+                    return None
             
         except Exception as e:
             logger.error(f"Failed to update user profile {user_id}: {e}")
