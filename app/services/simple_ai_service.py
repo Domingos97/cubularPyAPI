@@ -217,10 +217,10 @@ If no survey responses are found, explain what insights COULD be drawn IF there 
                 return None
             
             # Decrypt API key from database
-            encrypted_api_key = result.get("api_key")
+            api_key = result.get("api_key")
             try:
-                if encrypted_api_key:
-                    api_key = encryption_service.decrypt_api_key(encrypted_api_key)
+                if api_key:
+                    api_key = encryption_service.decrypt_api_key(api_key)
                     # Log key format without exposing the actual key
                     key_preview = f"{api_key[:8]}..." if api_key and len(api_key) > 8 else "invalid"
                     logger.info(f"Successfully decrypted API key for {module_name}: {key_preview}")
@@ -428,8 +428,8 @@ If no survey responses are found, explain what insights COULD be drawn IF there 
             raise ValueError("OpenRouter configuration not found in database")
         
         # Decrypt API key
-        encrypted_api_key = config_data["api_key"]
-        api_key = encryption_service.decrypt_api_key(encrypted_api_key)
+        api_key = config_data["api_key"]
+        api_key = encryption_service.decrypt_api_key(api_key)
 
         if not api_key:
             raise ValueError("OpenRouter API key not found or could not be decrypted")

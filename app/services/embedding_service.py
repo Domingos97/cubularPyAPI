@@ -48,7 +48,7 @@ class EmbeddingService:
                 
                 # Get module configuration using raw query
                 config_query = """
-                SELECT mc.model, mc.temperature, mc.max_tokens, ls.provider, ls.encrypted_api_key
+                SELECT mc.model, mc.temperature, mc.max_tokens, ls.provider, ls.api_key
                 FROM module_configurations mc
                 LEFT JOIN llm_settings ls ON mc.llm_setting_id = ls.id
                 WHERE mc.module_name = $1 AND mc.active = true
@@ -63,7 +63,7 @@ class EmbeddingService:
                     return {
                         "model": config_data["model"],
                         "provider": config_data["provider"],
-                        "encrypted_api_key": config_data["encrypted_api_key"]
+                        "api_key": config_data["api_key"]
                     }
             else:
                 # Use full service when DB session is available
@@ -94,7 +94,7 @@ class EmbeddingService:
             if provider in ["openai", "openai-compatible"] and config.get("api_key"):
                 # Decrypt API key
                 from app.utils.encryption import encryption_service
-                api_key = encryption_service.decrypt_api_key(config["encrypted_api_key"])
+                api_key = encryption_service.decrypt_api_key(config["api_key"])
                 
                 client = openai.AsyncOpenAI(api_key=api_key)
                 logger.info(f"Using OpenAI client with model: {model}")

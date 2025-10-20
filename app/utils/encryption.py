@@ -138,13 +138,13 @@ class EncryptionService:
             logger.error(f"Failed to encrypt API key: {str(e)}")
             raise
     
-    def decrypt_api_key(self, encrypted_api_key: str) -> str:
+    def decrypt_api_key(self, api_key: str) -> str:
         """Specifically decrypt API keys"""
-        if not encrypted_api_key:
+        if not api_key:
             return ""
         
         try:
-            return self.decrypt(encrypted_api_key)
+            return self.decrypt(api_key)
         except Exception as e:
             logger.error(f"Failed to decrypt API key: {str(e)}")
             raise
@@ -207,18 +207,18 @@ class APIKeyManager:
             logger.error(f"Failed to store API key: {str(e)}")
             raise
     
-    def retrieve_api_key(self, encrypted_api_key: str) -> str:
+    def retrieve_api_key(self, api_key: str) -> str:
         """Retrieve and decrypt an API key"""
-        if not encrypted_api_key:
+        if not api_key:
             return ""
         
         try:
             # Check if it's actually encrypted
-            if not self.encryption_service.is_encrypted(encrypted_api_key):
+            if not self.encryption_service.is_encrypted(api_key):
                 # If not encrypted, return as-is (for backward compatibility)
-                return encrypted_api_key
+                return api_key
             
-            return self.encryption_service.decrypt_api_key(encrypted_api_key)
+            return self.encryption_service.decrypt_api_key(api_key)
             
         except Exception as e:
             logger.error(f"Failed to retrieve API key: {str(e)}")

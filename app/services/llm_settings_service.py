@@ -170,12 +170,12 @@ class LLMSettingsService:
                 raise ValueError(f"LLM setting for provider '{setting_data.provider}' already exists. Use update or upsert instead.")
             
             # Encrypt the API key
-            encrypted_api_key = api_key_manager.store_api_key(setting_data.api_key)
+            api_key = api_key_manager.store_api_key(setting_data.api_key)
             
             # Create new setting
             new_setting = LLMSetting(
                 provider=setting_data.provider,
-                api_key=encrypted_api_key,
+                api_key=api_key,
                 active=setting_data.active if setting_data.active is not None else True,
                 created_by=created_by
             )
@@ -233,8 +233,8 @@ class LLMSettingsService:
                     raise ValueError(f"Invalid API key format for provider {setting.provider}")
                 
                 # Encrypt the new API key
-                encrypted_api_key = api_key_manager.store_api_key(setting_data.api_key)
-                update_data['api_key'] = encrypted_api_key
+                api_key = api_key_manager.store_api_key(setting_data.api_key)
+                update_data['api_key'] = api_key
             
             if update_data:
                 update_data['updated_at'] = datetime.utcnow()
