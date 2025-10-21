@@ -6,6 +6,7 @@ import shutil
 import uuid
 import math
 import json
+import asyncio
 
 from app.core.lightweight_dependencies import get_current_regular_user, get_current_admin_user, SimpleUser
 from app.services.lightweight_db_service import get_lightweight_db, LightweightDBService
@@ -491,38 +492,51 @@ async def upload_file_to_survey(db: LightweightDBService, survey_id: str, file_c
     
     # Process the file and generate embeddings
     try:
-        logger.info(f"Starting file processing and embedding generation for survey {survey_id}, file {file_id}")
-        
+        # Schedule processing and indexing as a background task so the HTTP request
+        # returns quickly even if embedding generation is slow or blocked in prod.
+        logger.info(f"Scheduling background processing and indexing for survey {survey_id}, file {file_id}")
+
         # Import the file processor and survey indexing service
         from app.services.survey_service import FileProcessor
         from app.services.survey_indexing_service import survey_indexing_service
-        
-        # Process the uploaded file
-        processed_data = await FileProcessor.process_survey_file(
-            str(storage_path), 
-            filename
-        )
-        
-        # Generate embeddings and create pickle file
-        indexing_success = await survey_indexing_service.index_survey_file(
-            survey_id=survey_id,
-            file_id=file_id,
-            processed_data=processed_data,
-            db=None  # No SQLAlchemy session available in lightweight mode
-        )
-        
-        if indexing_success:
-            logger.info(f"Successfully created embeddings and pickle file for survey {survey_id}, file {file_id}")
-        else:
-            logger.warning(f"Failed to create embeddings for survey {survey_id}, file {file_id}")
-            
-    except Exception as embedding_error:
-        # Don't fail the entire upload if embedding generation fails
-        logger.error(f"Embedding generation failed for survey {survey_id}, file {file_id}: {str(embedding_error)}")
-        # Log the full traceback for debugging
-        import traceback
-        logger.error(f"Full traceback: {traceback.format_exc()}")
-    
+
+        async def _process_and_index():
+            try:
+                logger.info(f"Background task started for survey {survey_id}, file {file_id}")
+                processed_data = await FileProcessor.process_survey_file(
+                    str(storage_path),
+                    filename
+                )
+
+                indexing_success = await survey_indexing_service.index_survey_file(
+                    survey_id=survey_id,
+                    file_id=file_id,
+                    processed_data=processed_data,
+                    db=None  # lightweight mode
+                )
+
+                if indexing_success:
+                    logger.info(f"Background: created embeddings/pickle for survey {survey_id}, file {file_id}")
+                else:
+                    logger.warning(f"Background: failed to create embeddings for survey {survey_id}, file {file_id}")
+
+            except Exception as embedding_error:
+                # Don't fail the HTTP response - just log the background failure
+                logger.error(f"Background embedding generation failed for survey {survey_id}, file {file_id}: {str(embedding_error)}", exc_info=True)
+
+        # Fire-and-forget the background task
+        try:
+            asyncio.create_task(_process_and_index())
+        except Exception:
+            # Fallback: run in event loop if create_task fails for some reason
+            import threading
+            def _run():
+                import asyncio as _asyncio
+                _asyncio.run(_process_and_index())
+            threading.Thread(target=_run, daemon=True).start()
+    except Exception as schedule_error:
+        logger.error(f"Failed to schedule background processing for survey {survey_id}, file {file_id}: {schedule_error}", exc_info=True)
+
     return {
         "id": file_id,
         "filename": filename,
