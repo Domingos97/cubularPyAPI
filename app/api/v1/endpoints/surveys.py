@@ -1612,6 +1612,163 @@ async def survey_semantic_chat(
 
 
 @router.post(
+    "/messages/{message_id}/retry",
+    summary="Retry a previously generated assistant message and update it in-place"
+)
+async def retry_assistant_message(
+    message_id: str,
+    request_data: dict,
+    current_user: SimpleUser = Depends(get_current_regular_user),
+    db: LightweightDBService = Depends(get_lightweight_db)
+):
+    """
+    Re-run the LLM for an existing assistant message and update the message content and metadata.
+    Expected body: { "sessionId": "<session-id>" }
+    """
+    try:
+        session_id = request_data.get('sessionId')
+
+        if not session_id:
+            return JSONResponse({"error": "sessionId required"}, status_code=400)
+
+        # Verify the session belongs to the current user
+        session = await db.get_chat_session(session_id, current_user.id)
+        if not session:
+            return JSONResponse({"error": "Session not found or access denied"}, status_code=404)
+
+        # Load the target message (include created_at) to ensure it's part of the session and is an assistant message
+        msg_row = await db.execute_fetchrow(
+            "SELECT id, session_id, sender, content, data_snapshot, confidence, created_at FROM chat_messages WHERE id = $1 AND session_id = $2",
+            [message_id, session_id]
+        )
+        if not msg_row:
+            return JSONResponse({"error": "Message not found in session"}, status_code=404)
+
+        if msg_row.get('sender') != 'assistant':
+            return JSONResponse({"error": "Can only retry assistant messages"}, status_code=400)
+
+        # Find the nearest preceding user message in the session for context using a single SQL query
+        user_prompt = None
+        try:
+            assistant_created_at = msg_row.get('created_at')
+            if assistant_created_at:
+                prev_user = await db.execute_fetchrow(
+                    "SELECT content FROM chat_messages WHERE session_id = $1 AND sender = 'user' AND created_at < $2 ORDER BY created_at DESC LIMIT 1",
+                    [session_id, assistant_created_at]
+                )
+                if prev_user and prev_user.get('content'):
+                    user_prompt = prev_user.get('content')
+        except Exception as _e:
+            logger.warning(f"Failed to find preceding user message for retry: {_e}")
+
+        if not user_prompt:
+            # Fallback: use the most recent user message in the session (best-effort)
+            try:
+                fallback_user = await db.execute_fetchrow(
+                    "SELECT content FROM chat_messages WHERE session_id = $1 AND sender = 'user' ORDER BY created_at DESC LIMIT 1",
+                    [session_id]
+                )
+                if fallback_user and fallback_user.get('content'):
+                    user_prompt = fallback_user.get('content')
+                    logger.info(f"Retry: falling back to most recent user prompt for session {session_id}")
+            except Exception as _e:
+                logger.warning(f"Retry fallback query failed: {_e}")
+
+        if not user_prompt:
+            return JSONResponse({"error": "Original user prompt not found for retry"}, status_code=400)
+
+        # Rebuild minimal AI context similar to semantic-chat (search + personality)
+        from app.services.module_config_cache import module_config_cache
+        module_name = "ai_chat_integration"
+        module_config = await module_config_cache.get_config(db, module_name)
+        if not module_config:
+            return JSONResponse({"error": "AI chat integration not configured"}, status_code=503)
+
+        effective_personality_id = session.get('personality_id') or module_config.get('ai_personality_id')
+        chat_prompt = None
+        if effective_personality_id:
+            personality_data = await db.execute_fetchrow(
+                "SELECT detailed_analysis_prompt FROM ai_personalities WHERE id = $1 AND is_active = true",
+                [effective_personality_id]
+            )
+            if personality_data:
+                chat_prompt = personality_data.get('detailed_analysis_prompt')
+
+        from app.services.simple_ai_service import simple_ai
+
+        system_prompt = chat_prompt if chat_prompt else simple_ai.default_system_prompt
+        user_language = current_user.language or 'English'
+        system_prompt += f"\n\nIMPORTANT NOTES: You need to always respond in user language: {user_language}"
+
+        messages = [{"role": "system", "content": system_prompt}]
+
+        # Add recent conversation history for context
+        try:
+            conv_history = await db.get_recent_messages(session_id, 6)
+            for m in conv_history:
+                messages.append({"role": m.get('sender'), "content": m.get('content')})
+        except Exception:
+            pass
+
+        messages.append({"role": "user", "content": user_prompt})
+
+        # Generate new AI response
+        ai_response = await simple_ai.generate_response(
+            messages=messages,
+            provider=module_config["provider"],
+            model=module_config["model"],
+            temperature=module_config.get("temperature", 0.7),
+            max_tokens=module_config.get("max_tokens", 1500)
+        )
+
+        if not ai_response or not ai_response.strip():
+            ai_response = "I apologize, I'm having trouble processing the retry at the moment."
+
+        # Try to parse structured response
+        conversational_response = ai_response
+        data_snapshot = None
+        confidence = None
+        try:
+            import json as _json
+            parsed = _json.loads(ai_response)
+            if isinstance(parsed, dict):
+                conversational_response = parsed.get('conversationalResponse', conversational_response)
+                data_snapshot = parsed.get('dataSnapshot')
+                confidence = parsed.get('confidence')
+        except Exception:
+            pass
+
+        # Update the existing assistant message in DB
+        try:
+            # Convert snapshot/confidence to JSON strings as needed
+            import json as _json
+            data_snapshot_json = _json.dumps(data_snapshot) if data_snapshot is not None else None
+            confidence_json = _json.dumps(confidence) if confidence is not None else None
+
+            await db.execute_command(
+                "UPDATE chat_messages SET content = $1, data_snapshot = $2::jsonb, confidence = $3::jsonb WHERE id = $4 AND session_id = $5",
+                [conversational_response, data_snapshot_json, confidence_json, message_id, session_id]
+            )
+        except Exception as e:
+            logger.error(f"Failed to update message {message_id}: {e}")
+            return JSONResponse({"error": "Failed to update message"}, status_code=500)
+
+        return JSONResponse({
+            "response": conversational_response,
+            "dataSnapshot": data_snapshot,
+            "confidence": confidence,
+            "sessionId": session_id,
+            "success": True
+        }, status_code=200)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error retrying assistant message: {e}")
+        return JSONResponse({"error": "Retry failed", "details": str(e)}, status_code=500)
+
+
+@router.post(
     "/semantic-chat-stream",
     summary="Survey semantic chat - AI analysis with streaming response"
 )
